@@ -1,0 +1,391 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "全球投研终端 — 系统架构",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1360,
+      672
+    ]
+  },
+  "components": [
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "浏览器",
+      "sublabel": "React SPA · Vite · ECharts",
+      "tag": "5173",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        150,
+        76
+      ]
+    },
+    {
+      "id": "fastapi",
+      "type": "backend",
+      "label": "FastAPI 网关",
+      "sublabel": "app.py · CORS",
+      "tag": ":8000",
+      "pos": [
+        260,
+        300
+      ],
+      "size": [
+        150,
+        76
+      ]
+    },
+    {
+      "id": "screener",
+      "type": "backend",
+      "label": "综合筛选",
+      "sublabel": "多因子评分 0-100",
+      "pos": [
+        500,
+        80
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "indicators",
+      "type": "backend",
+      "label": "技术指标",
+      "sublabel": "均线/MACD/RSI/布林",
+      "pos": [
+        720,
+        80
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "macro",
+      "type": "backend",
+      "label": "宏观模块",
+      "sublabel": "快照/新闻/市场偏置",
+      "pos": [
+        500,
+        240
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "universe",
+      "type": "database",
+      "label": "标的池",
+      "sublabel": "7 市场 · 静态定义",
+      "pos": [
+        260,
+        470
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "providers",
+      "type": "backend",
+      "label": "数据提供层",
+      "sublabel": "5min 缓存 · 失败熔断",
+      "pos": [
+        820,
+        240
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "tencent",
+      "type": "external",
+      "label": "腾讯行情",
+      "sublabel": "A股/美股/港股/ETF",
+      "pos": [
+        1070,
+        40
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "naver",
+      "type": "external",
+      "label": "Naver Finance",
+      "sublabel": "韩股",
+      "pos": [
+        1070,
+        155
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "external",
+      "label": "Gate.io / Binance",
+      "sublabel": "数字货币",
+      "pos": [
+        1070,
+        270
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "fxfund",
+      "type": "external",
+      "label": "Frankfurter / 东财",
+      "sublabel": "外汇 · 基金净值",
+      "pos": [
+        1070,
+        385
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "fallback",
+      "type": "external",
+      "label": "yfinance / akshare / mock",
+      "sublabel": "备用源 · 确定性模拟",
+      "pos": [
+        1070,
+        500
+      ],
+      "size": [
+        170,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "浏览器端",
+      "wraps": [
+        "browser"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "backend/ — FastAPI + 业务核心",
+      "wraps": [
+        "fastapi",
+        "screener",
+        "indicators",
+        "macro",
+        "universe",
+        "providers"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "外部数据源",
+      "wraps": [
+        "tencent",
+        "naver",
+        "gate",
+        "fxfund",
+        "fallback"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "browser-api",
+      "from": "browser",
+      "to": "fastapi",
+      "label": "HTTP /api/*",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-screen",
+      "from": "fastapi",
+      "to": "screener",
+      "label": "筛选/推荐",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "api-analyze",
+      "from": "fastapi",
+      "to": "indicators",
+      "label": "分析",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "labelDy": -10
+    },
+    {
+      "id": "api-macro",
+      "from": "fastapi",
+      "to": "macro",
+      "label": "宏观",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "api-universe",
+      "from": "fastapi",
+      "to": "universe",
+      "label": "标的池",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 40
+    },
+    {
+      "id": "api-kline",
+      "from": "fastapi",
+      "to": "providers",
+      "label": "K线行情",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        600,
+        352
+      ]
+    },
+    {
+      "id": "screen-ind",
+      "from": "screener",
+      "to": "indicators",
+      "label": "技术因子",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "screen-macro",
+      "from": "screener",
+      "to": "macro",
+      "label": "宏观因子",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        620,
+        205
+      ]
+    },
+    {
+      "id": "ind-providers",
+      "from": "indicators",
+      "to": "providers",
+      "label": "读行情",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "prov-tencent",
+      "from": "providers",
+      "to": "tencent",
+      "label": "主源",
+      "labelAt": [
+        1052,
+        56
+      ]
+    },
+    {
+      "id": "prov-naver",
+      "from": "providers",
+      "to": "naver",
+      "label": "主源",
+      "labelAt": [
+        1052,
+        171
+      ]
+    },
+    {
+      "id": "prov-gate",
+      "from": "providers",
+      "to": "gate",
+      "label": "主源",
+      "labelAt": [
+        1052,
+        286
+      ]
+    },
+    {
+      "id": "prov-fxfund",
+      "from": "providers",
+      "to": "fxfund",
+      "label": "主源",
+      "labelAt": [
+        1052,
+        401
+      ]
+    },
+    {
+      "id": "prov-fallback",
+      "from": "providers",
+      "to": "fallback",
+      "label": "自动回退",
+      "variant": "dashed",
+      "labelAt": [
+        1048,
+        578
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "多市场路由",
+      "items": [
+        "A股/美股/港股/ETF → 腾讯",
+        "韩股 → Naver，数字货币 → Gate.io",
+        "外汇 → Frankfurter，基金 → 东方财富"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "高可用降级",
+      "items": [
+        "主源失败 → 备用源（yfinance/akshare/Binance）",
+        "全部失败 → 确定性模拟数据",
+        "source 字段标识 live / mock"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "性能设计",
+      "items": [
+        "5 分钟内存缓存（线程安全）",
+        "失败数据源 120 秒熔断"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "评分模型",
+      "items": [
+        "技术指标 → 趋势/动能/波动/风险因子",
+        "叠加宏观偏置 → 0-100 综合评分",
+        "推荐附加权原因（7 类）"
+      ]
+    }
+  ]
+}

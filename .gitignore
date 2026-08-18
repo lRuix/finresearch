@@ -1,0 +1,13 @@
+.DS_Store
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+.pnpm-store/
+.pnpm-global/
+design/
+*.png

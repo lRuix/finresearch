@@ -1,0 +1,7 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+yfinance>=0.2.40
+akshare>=1.18
+
+# 备用数据源，按需安装
+# ccxt>=4.3
