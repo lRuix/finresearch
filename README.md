@@ -79,7 +79,7 @@ pnpm dev
 - `GET /api/screen?market=all&min_score=60&limit=60` 全球筛选。
 - `GET /api/macro` 宏观快照与局势热词。
 - `GET /api/search?q=688836` 任意代码跨市场搜索。
-- `GET /api/recommend?market=a-share&symbol=688836` 单标的完整推荐（因子分+情绪+风险指标）。
+- `GET /api/recommend?market=a-share&symbol=688836` 单标的分析（技术指标 + 综合评分 + 宏观偏置）。
 - `GET /api/compare?symbols=AAPL,600519,BTCUSDT` 跨资产风险调整后收益排序。
 
 ## 跨资产 RMB 计价与缓存
