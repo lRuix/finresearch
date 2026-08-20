@@ -33,6 +33,9 @@ flowchart TB
         S["/api/screen"]
         R["/api/recommendations"]
         MC["/api/macro"]
+        SRCH["/api/search"]
+        REC["/api/recommend"]
+        CMP["/api/compare"]
     end
 
     subgraph Core["backend/core/ — 业务逻辑"]
@@ -41,6 +44,10 @@ flowchart TB
         IND["indicators.py<br/>均线/MACD/RSI/布林/ATR/动量"]
         SCR["screener.py<br/>多因子评分 0-100"]
         MAC["macro.py<br/>宏观快照 / 新闻 / 市场偏置"]
+        SEARCH["search.py<br/>代码识别 / 元数据解析 / 天级缓存"]
+        VAL["valuation/<br/>RMB 计价 / 购汇额度 / 风险指标"]
+        CMPR["comparison.py<br/>跨资产比较排序"]
+        ALGO["algorithms/<br/>因子 / 情绪 / 引擎（可插拔）"]
     end
 
     subgraph Sources["外部数据源（真实行情，失败自动回退）"]
@@ -56,7 +63,7 @@ flowchart TB
     end
 
     API -- "HTTP GET /api/*" --> APP
-    APP --> H & M & U & K & A & S & R & MC
+    APP --> H & M & U & K & A & S & R & MC & SRCH & REC & CMP
     M & U --> UNIV
     K --> PROV
     A --> IND
@@ -67,7 +74,16 @@ flowchart TB
     SCR --> IND
     SCR --> MAC
     SCR --> UNIV
+    SRCH --> SEARCH
+    REC --> SEARCH
+    REC --> IND
+    REC --> MAC
+    CMP --> CMPR
+    CMPR --> VAL
+    CMP --> PROV
+    SEARCH --> PROV
     IND --> PROV
+    ALGO -.-> REC
     PROV --> TX & NV & GT & BN & FR & EM & YF & AK & MOCK
 ```
 
@@ -118,6 +134,36 @@ sequenceDiagram
 | **评分模型** | `indicators.py` 计算技术指标 → `screener.py` 综合趋势/动能/波动/风险/宏观因子 → 0-100 分 |
 | **推荐解释** | 每个标的附加权原因（技术指标/宏观/地缘/资金流/政策/行业/风险） |
 | **CORS** | FastAPI 全放开，便于前端 5173 ↔ 后端 8000 跨端口调试 |
+| **天级缓存** | `search.py` 的 `daily_cache_get/set` 按自然日判定，同一键同一天只评估一次 |
+
+## 模块一（工程）/ 模块二（算法）拆分
+
+系统按「工程层 / 算法层」双向解耦，算法可插拔、可独立测试：
+
+### 模块一（工程层）— `backend/core/` 根目录
+
+| 模块 | 职责 |
+|---|---|
+| `providers.py` | 数据提供：真实源路由 + 熔断 + 确定性模拟兜底 |
+| `search.py` | 任意代码跨市场识别（`detect_market`/`normalize_symbol`）、元数据解析（`resolve_meta`）、天级缓存 |
+| `indicators.py` | 技术指标：均线/MACD/RSI/布林/ATR/年化波动 |
+| `screener.py` | 多因子评分 0-100 与推荐列表 |
+| `macro.py` | 宏观快照 / 新闻 / 市场偏置 |
+| `valuation/` | 统一 RMB 计价（`currency.py`：复合折算公式）与购汇额度约束（`constraints.py`：5 万美元/年）；风险调整后收益指标（`metrics.py`：最大回撤/年化/卡玛/夏普） |
+| `comparison.py` | 跨资产比较编排：RMB 口径风险调整后收益排序（卡玛降序，None 置底） |
+
+### 模块二（算法层）— `backend/core/algorithms/`
+
+算法层只消费 `AnalysisContext` 数据契约（`algorithms/context.py`：symbol/market/currency/klines/macro_bias/news_sentiment/fx_rate/horizon），**不 import providers、不发起网络请求**，便于离线单测与替换：
+
+| 子模块 | 内容 |
+|---|---|
+| `factors/` | 因子 ABC + 五个可插拔因子（trend/momentum/volatility/risk/macro），`FACTOR_REGISTRY` 注册表 |
+| `sentiment/` | 情绪分析 ABC + `NewsRuleAnalyzer`（乘数 = 1 + 0.2×polarity），`SENTIMENT_REGISTRY` 注册表 |
+| `engines/` | 推荐引擎 ABC + `WeightedEngine`（截面 z-score → 加权 → sigmoid 0-100 → 情绪乘数），`ENGINE_REGISTRY` 注册表 |
+| `config.py` | `DEFAULT_CONFIG` + `build_engine` 工厂：按配置装配因子/情绪/引擎 |
+
+**可插拔机制**：注册表（`*_REGISTRY`）按名称映射实现类，新增因子/分析器/引擎只需实现 ABC 并注册，工程层与调用方零改动；`build_engine(config)` 通过配置串起整条算法链。
 
 ## 启动拓扑
 

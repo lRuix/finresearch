@@ -20,6 +20,14 @@ frontend/  React + Vite + ECharts
 backend/   FastAPI + yfinance + 可选 akshare/ccxt
 ```
 
+### 模块一（工程层）/ 模块二（算法层）划分
+
+- **模块一（工程层）**：`backend/core/` 根目录 —— 数据获取（`providers.py`，真实源 + 确定性模拟兜底）、代码识别与跨市场搜索（`search.py`）、技术指标（`indicators.py`）、筛选与推荐（`screener.py`）、宏观（`macro.py`）、统一 RMB 计价与购汇额度约束（`valuation/`）、跨资产比较编排（`comparison.py`）。
+- **模块二（算法层）**：`backend/core/algorithms/` —— 算法只消费 `AnalysisContext` 数据契约（`algorithms/context.py`），**不 import providers、不发起网络请求**：
+  - 因子：`algorithms/factors/`，五个可插拔因子（trend/momentum/volatility/risk/macro）+ `FACTOR_REGISTRY` 注册表；
+  - 情绪分析：`algorithms/sentiment/`，`NewsRuleAnalyzer` + `SENTIMENT_REGISTRY`；
+  - 推荐引擎：`algorithms/engines/`，`WeightedEngine`（截面 z-score + 加权合成 + 情绪乘数）+ `ENGINE_REGISTRY`，由 `algorithms/config.py` 的 `build_engine` 工厂装配。
+
 数据层通过 `backend/core/providers.py` 提供统一入口：
 
 - A 股、美股、港股、ETF 基金优先使用腾讯公开行情接口。
@@ -70,6 +78,15 @@ pnpm dev
 - `GET /api/recommendations?limit=10` 首页加权推荐列表。
 - `GET /api/screen?market=all&min_score=60&limit=60` 全球筛选。
 - `GET /api/macro` 宏观快照与局势热词。
+- `GET /api/search?q=688836` 任意代码跨市场搜索。
+- `GET /api/recommend?market=a-share&symbol=688836` 单标的完整推荐（因子分+情绪+风险指标）。
+- `GET /api/compare?symbols=AAPL,600519,BTCUSDT` 跨资产风险调整后收益排序。
+
+## 跨资产 RMB 计价与缓存
+
+- RMB 折算采用**复合公式**：`收益(RMB) = (1 + 收益本币) × (1 + 汇率变动率) - 1`（简单乘法只是近似，本项目按金融口径采用复合公式，见 `core/valuation/currency.py`）。
+- 程序按**自然日**刷新数据；评估结果按**天级缓存**（`core/search.py` 的 `daily_cache_get/set`），同一键同一天只评估一次。
+- 购汇约束：美股/港股/韩股/外汇/数字货币需占用个人年度等值 5 万美元购汇额度（`core/valuation/constraints.py`，`requires_quota`/`quota_note`）。
 
 ## 后续路线
 
