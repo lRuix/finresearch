@@ -7,9 +7,11 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from core import macro, screener
+from core import comparison, macro, screener, search
+from core.algorithms.config import build_engine
 from core.indicators import analyze
 from core.providers import get_kline, get_kline_with_source
+from core.search import search as search_instruments
 from core.universe import MARKETS, UNIVERSE, find_symbol, universe_for
 
 
@@ -119,3 +121,47 @@ def macro_payload(live_news: bool = Query(False)) -> dict:
     payload = macro.macro_payload(live_news=live_news)
     payload["universe_size"] = len(UNIVERSE)
     return payload
+
+
+@app.get("/api/search")
+def search_instruments_endpoint(q: str = Query("", max_length=64)) -> dict:
+    return search_instruments(q)
+
+
+@app.get("/api/recommend")
+def recommend_symbol(market: str, symbol: str) -> dict:
+    rows = get_kline(market, symbol, "d", 180, prefer_real=True)
+    if not rows:
+        return {"error": "no kline data", "market": market, "symbol": symbol}
+    meta = search.resolve_meta(market, symbol) or {}
+    enriched = dict(meta)
+    enriched["macro_score"] = macro.macro_score_for(market)
+    analysis = analyze(rows, enriched)
+    return {
+        "meta": meta,
+        "analysis": analysis,
+        "market": market,
+        "symbol": symbol,
+    }
+
+
+@app.get("/api/compare")
+def compare_symbols(symbols: str = Query("")) -> dict:
+    tokens = [t.strip() for t in symbols.split(",") if t.strip()]
+    assets = []
+    for token in tokens:
+        mkt = search.detect_market(token)
+        if mkt is None:
+            continue
+        sym = search.normalize_symbol(mkt, token)
+        rows = get_kline(mkt, sym, "d", 180, prefer_real=True)
+        if not rows:
+            continue
+        assets.append({
+            "symbol": sym,
+            "name": token,
+            "market": mkt,
+            "currency": "CNY" if mkt in ("a-share", "fund") else "USD",
+            "rmb_closes": [r["close"] for r in rows],
+        })
+    return {"items": comparison.compare_assets(assets), "total": len(assets)}
