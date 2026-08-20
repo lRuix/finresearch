@@ -11,3 +11,6 @@ __pycache__/
 .pnpm-global/
 design/
 *.png
+
+.agent-teams/
+.superpowers/
