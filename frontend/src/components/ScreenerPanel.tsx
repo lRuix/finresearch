@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Filter, RefreshCw, Search, Sparkles } from "lucide-react";
 import type { ScreenItem, ScreenResult } from "../types";
 
@@ -32,6 +33,7 @@ interface ScreenerPanelProps {
   onApply: () => void;
   onRefresh: () => void;
   loading: boolean;
+  onSearch?: (query: string) => void;
 }
 
 function signed(value: number): string {
@@ -50,7 +52,9 @@ export default function ScreenerPanel({
   onApply,
   onRefresh,
   loading,
+  onSearch,
 }: ScreenerPanelProps) {
+  const [searchText, setSearchText] = useState("");
   return (
     <aside className="panel screener-panel">
       <div className="panel-head">
@@ -59,6 +63,18 @@ export default function ScreenerPanel({
         <button className="icon-btn" title="刷新筛选" onClick={onRefresh}>
           <RefreshCw size={14} />
         </button>
+      </div>
+
+      <div className="screener-search">
+        <input
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && onSearch) onSearch(searchText.trim());
+          }}
+          placeholder="输入代码搜索任意标的（如 688836 / AAPL / BTCUSDT）"
+        />
+        <button onClick={() => onSearch?.(searchText.trim())}>搜索</button>
       </div>
 
       <div className="market-tabs" role="tablist" aria-label="市场">

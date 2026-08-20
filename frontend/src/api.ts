@@ -59,3 +59,18 @@ export function fetchAnalysis(market: string, symbol: string): Promise<AnalyzeRe
 export function fetchMacro(): Promise<MacroPayload> {
   return getJson<MacroPayload>("/api/macro");
 }
+
+export interface SearchItem {
+  symbol: string;
+  name: string;
+  market: string;
+  currency: string;
+  sector?: string;
+  auto?: boolean;
+}
+
+export function searchInstruments(q: string): Promise<{ items: SearchItem[]; total: number }> {
+  return getJson<{ items: SearchItem[]; total: number }>(
+    `/api/search?q=${encodeURIComponent(q)}`,
+  );
+}

@@ -216,6 +216,45 @@ button {
   margin-left: auto;
 }
 
+.screener-search {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px 4px;
+}
+
+.screener-search input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.screener-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.screener-search button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.screener-search button:hover {
+  color: var(--text);
+}
+
 .market-tabs {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

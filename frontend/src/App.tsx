@@ -11,6 +11,7 @@ import {
   fetchMacro,
   fetchRecommendations,
   fetchScreen,
+  searchInstruments,
 } from "./api";
 import type {
   AnalysisData,
@@ -161,6 +162,31 @@ export default function App() {
     }
   }, []);
 
+  const handleSearch = useCallback(async (query: string) => {
+    if (!query) return;
+    setError("");
+    try {
+      const result = await searchInstruments(query);
+      if (result.items.length === 0) {
+        setError(`未找到 "${query}" 对应的标的`);
+        return;
+      }
+      const first = result.items[0];
+      setSelected({
+        symbol: first.symbol,
+        name: first.name,
+        market: first.market,
+        currency: first.currency,
+        sector: first.sector ?? "未分类",
+        market_name: first.market,
+        base_risk: 0.5,
+        liquidity: 0.5,
+      } as unknown as ScreenItem);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "搜索失败");
+    }
+  }, []);
+
   useEffect(() => {
     if (market === "all") {
       void runRecommendations();
@@ -298,6 +324,7 @@ export default function App() {
             market === "all" ? () => void runRecommendations() : () => void runScreen()
           }
           loading={loading.screen}
+          onSearch={(query) => void handleSearch(query)}
         />
 
         <section className="panel chart-panel">
