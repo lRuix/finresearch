@@ -55,3 +55,10 @@ def test_risk_factor_range(uptrend_ctx):
 def test_macro_factor_uses_bias(uptrend_ctx):
     result = MacroFactor().score(uptrend_ctx)
     assert result["score"] == 70.0
+
+
+def test_trend_factor_empty_klines():
+    ctx = AnalysisContext(symbol="TEST", market="a-share", currency="CNY", klines=[])
+    result = TrendFactor().score(ctx)
+    assert result["score"] == 50.0
+    assert result["detail"]["empty"] is True

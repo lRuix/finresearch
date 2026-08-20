@@ -11,6 +11,8 @@ class TrendFactor(Factor):
 
     def score(self, ctx: AnalysisContext) -> dict:
         closes = [r["close"] for r in ctx.klines]
+        if not closes:
+            return {"score": 50.0, "detail": {"points": 0, "checks": 0, "empty": True}}
         points = 0
         checks = 0
         sma5, sma10, sma20 = sma(closes, 5), sma(closes, 10), sma(closes, 20)
