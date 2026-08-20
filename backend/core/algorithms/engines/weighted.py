@@ -41,6 +41,12 @@ class WeightedEngine(RecommendationEngine):
         return self._sentiment
 
     def combine(self, factor_scores: dict[str, float], sentiment: dict) -> dict:
+        """单标的合成：对单个标的的 5 个因子做横向 z-score。
+
+        注意语义：此处 z-score 是「因子间相对强弱」（衡量各因子均衡度），
+        不是 spec 5.4 要求的「跨标的同市场截面」绝对强弱——后者请用
+        score_cross_sectional（对同一因子在所有标的间做 z-score）。
+        """
         available = {k: v for k, v in factor_scores.items() if k in self._weights}
         if not available:
             return {"total_score": 50.0, "detail": {"available": [], "multiplier": sentiment.get("multiplier", 1.0)}}
@@ -71,3 +77,56 @@ class WeightedEngine(RecommendationEngine):
                 "base_score": round(base_score, 1),
             },
         }
+
+    def score_cross_sectional(self, contexts: list[AnalysisContext]) -> list[dict]:
+        """跨标的同市场截面评分：对每个因子在同市场所有标的间做 z-score。
+
+        contexts: 同一市场的标的上下文列表（每个含 symbol + klines 等）。
+        返回每个标的的评分 dict（含 symbol、因子原始分、因子 z-score、总分）。
+        """
+        from core.algorithms.context import AnalysisContext
+
+        # 1) 算每个标的的因子原始分
+        per_symbol: dict[str, dict[str, float]] = {}
+        for ctx in contexts:
+            scores = {}
+            for factor in self.factors:
+                result = factor.score(ctx)
+                scores[factor.name] = result["score"]
+            per_symbol[ctx.symbol] = scores
+
+        # 2) 对每个因子，在标的间做 z-score
+        factor_names = [f.name for f in self.factors]
+        z_per_symbol: dict[str, dict[str, float]] = {ctx.symbol: {} for ctx in contexts}
+        for fname in factor_names:
+            raw = [per_symbol[s][fname] for s in per_symbol]
+            mean = sum(raw) / len(raw) if raw else 0.0
+            var = sum((v - mean) ** 2 for v in raw) / len(raw) if raw else 0.0
+            std = var ** 0.5
+            for ctx in contexts:
+                s = ctx.symbol
+                z_per_symbol[s][fname] = (per_symbol[s][fname] - mean) / std if std > 1e-9 else 0.0
+
+        # 3) 每个标的：加权合成 z-score → sigmoid → 情绪乘数
+        results = []
+        for ctx in contexts:
+            s = ctx.symbol
+            sentiment = self.sentiment.analyze(ctx)
+            total_w = sum(self._weights.get(f, 0.0) for f in factor_names) or 1.0
+            composite_z = sum(
+                z_per_symbol[s][f] * self._weights.get(f, 0.0) / total_w
+                for f in factor_names
+            )
+            base_score = _sigmoid(composite_z)
+            multiplier = sentiment.get("multiplier", 1.0)
+            total = _clamp(base_score * multiplier)
+            results.append({
+                "symbol": s,
+                "market": ctx.market,
+                "factor_scores": per_symbol[s],
+                "factor_z_scores": {f: round(z_per_symbol[s][f], 4) for f in factor_names},
+                "total_score": round(total, 1),
+                "base_score": round(base_score, 1),
+                "multiplier": multiplier,
+            })
+        return results
