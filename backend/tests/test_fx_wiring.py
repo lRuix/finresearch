@@ -1,6 +1,9 @@
 """RMB 计价接线测试。"""
+from unittest.mock import patch
+
 import pytest
 
+from core import providers
 from core.valuation.currency import reference_fx_rate, to_rmb_closes
 from core.search import currency_for
 
@@ -19,13 +22,16 @@ def test_to_rmb_closes_cny_identity():
 
 
 def test_reference_fx_rate_known():
-    assert reference_fx_rate("CNY") == 1.0
-    assert reference_fx_rate("USD") == 7.18
-    assert reference_fx_rate("KRW") == 0.0053
+    # 实时查询失败时回退静态参考值
+    with patch.object(providers, "get_live_fx_rates", return_value=None):
+        assert reference_fx_rate("CNY") == 1.0
+        assert reference_fx_rate("USD") == 7.18
+        assert reference_fx_rate("KRW") == 0.0053
 
 
 def test_reference_fx_rate_unknown_falls_back():
-    assert reference_fx_rate("XYZ") == 1.0
+    with patch.object(providers, "get_live_fx_rates", return_value=None):
+        assert reference_fx_rate("XYZ") == 1.0
 
 
 def test_currency_for_all_markets():

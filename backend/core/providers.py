@@ -700,3 +700,29 @@ def get_kline(
 ) -> list[dict]:
     rows, _ = get_kline_with_source(market, symbol, interval, limit, prefer_real)
     return rows
+
+
+def get_live_fx_rates() -> dict[str, float] | None:
+    """实时拉取 USD 基准汇率，换算为「本币 → RMB」参考汇率。
+
+    数据源：frankfurter（USD 基准）。返回 {currency: 1本币=多少RMB}，
+    失败返回 None（调用方回退静态值）。
+    """
+    payload = _get_json(
+        "https://api.frankfurter.dev/v1/latest?base=USD&symbols=CNY,HKD,KRW",
+        timeout=6,
+    )
+    rates = (payload or {}).get("rates", {})
+    if not rates or "CNY" not in rates:
+        return None
+    cny = float(rates["CNY"])          # 1 USD = cny RMB
+    hkd = float(rates.get("HKD", 7.84))  # 1 USD = hkd HKD
+    krw = float(rates.get("KRW", 1396.0))  # 1 USD = krw KRW
+    return {
+        "CNY": 1.0,
+        "USD": cny,
+        "USDT": cny,                   # USDT 按 USD 计价
+        "HKD": cny / hkd,
+        "KRW": cny / krw,
+        "MULTI": 1.0,                  # 外汇对本身是货币对，暂按 1.0
+    }

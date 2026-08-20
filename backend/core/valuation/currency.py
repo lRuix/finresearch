@@ -1,6 +1,8 @@
 """统一 RMB 计价。"""
 from __future__ import annotations
 
+from core import providers
+
 
 def to_rmb_returns(returns: list[float], fx_change: float) -> list[float]:
     """本币收益率序列折算为 RMB 口径：收益(RMB) = (1+收益(本币)) × (1+汇率变动率) - 1。
@@ -41,5 +43,11 @@ _REFERENCE_FX_RATE = {
 
 
 def reference_fx_rate(currency: str) -> float:
-    """本币 → RMB 参考汇率，未知币种回落 1.0。"""
+    """本币 → RMB 汇率：优先实时查询，失败回退静态参考值。"""
+    try:
+        live = providers.get_live_fx_rates()
+        if live and currency in live:
+            return live[currency]
+    except Exception:
+        pass
     return _REFERENCE_FX_RATE.get(currency, 1.0)
