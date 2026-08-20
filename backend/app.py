@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core import comparison, macro, screener, search
 from core.algorithms.config import build_engine
+from core.algorithms.context import AnalysisContext
 from core.indicators import analyze
 from core.providers import get_kline, get_kline_with_source
 from core.search import search as search_instruments
@@ -29,6 +30,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _market_sentiment(market: str) -> float:
+    """取该市场相关新闻的平均 sentiment（-1..1），无则 0.0。"""
+    tags = {
+        "a-share": {"A股", "政策", "信用"},
+        "fund": {"A股", "政策", "ETF"},
+        "us": {"美股", "利率", "美元", "全球"},
+        "kr": {"韩股", "半导体", "汇率", "全球"},
+        "hk": {"港股", "南向资金", "政策"},
+        "fx": {"汇率", "美元", "利率", "全球"},
+        "crypto": {"数字货币", "ETF", "全球"},
+    }
+    wanted = tags.get(market, {"全球"})
+    scores = [n["sentiment"] for n in macro.NEWS_ITEMS if set(n["tags"]) & wanted]
+    if not scores:
+        return 0.0
+    return round(sum(scores) / len(scores), 4)
 
 
 @app.get("/api/health")
@@ -135,14 +154,38 @@ def recommend_symbol(market: str, symbol: str) -> dict:
     if not rows:
         return {"error": "no kline data", "market": market, "symbol": symbol}
     meta = search.resolve_meta(market, symbol) or {}
-    enriched = dict(meta)
-    enriched["macro_score"] = macro.macro_score_for(market)
-    analysis = analyze(rows, enriched)
+    currency = search.currency_for(market)
+    # 新闻情绪：取该市场新闻平均 sentiment（macro.NEWS_ITEMS 的 sentiment 字段）
+    news_sentiment = _market_sentiment(market)
+    ctx = AnalysisContext(
+        symbol=symbol,
+        market=market,
+        currency=currency,
+        klines=rows,
+        macro_bias=macro.macro_score_for(market),
+        news_sentiment=news_sentiment,
+        fx_rate=currency_util.reference_fx_rate(currency),
+        horizon="short",
+    )
+    engine = build_engine()
+    factor_scores = {}
+    factor_details = {}
+    for factor in engine.factors:
+        result = factor.score(ctx)
+        factor_scores[factor.name] = result["score"]
+        factor_details[factor.name] = result.get("detail", {})
+    sentiment = engine.sentiment.analyze(ctx)
+    combined = engine.combine(factor_scores, sentiment)
     return {
         "meta": meta,
-        "analysis": analysis,
         "market": market,
         "symbol": symbol,
+        "currency": currency,
+        "factor_scores": factor_scores,
+        "factor_details": factor_details,
+        "sentiment": sentiment,
+        "total_score": combined["total_score"],
+        "detail": combined.get("detail", {}),
     }
 
 
