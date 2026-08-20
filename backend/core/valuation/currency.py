@@ -17,3 +17,29 @@ def market_fx_rate(market: str, currency: str) -> float | None:
     if currency == "CNY":
         return 1.0
     return None
+
+
+def to_rmb_closes(closes: list[float], fx_rate: float) -> list[float]:
+    """本币收盘价序列折算为 RMB 口径：rmb_price = local_price × fx_rate。
+
+    closes: 本币收盘价序列
+    fx_rate: 本币 → RMB 汇率（1 本币 = fx_rate RMB），CNY 时传 1.0
+    """
+    return [c * fx_rate for c in closes]
+
+
+#: 本币 → RMB 参考汇率（1 本币 = 多少 RMB）。CNY=1.0；其余为静态参考值，
+#: 生产环境应由 providers 的 frankfurter 实时填充（后续优化）。
+_REFERENCE_FX_RATE = {
+    "CNY": 1.0,
+    "USD": 7.18,
+    "HKD": 0.92,
+    "KRW": 0.0053,
+    "USDT": 7.18,
+    "MULTI": 1.0,
+}
+
+
+def reference_fx_rate(currency: str) -> float:
+    """本币 → RMB 参考汇率，未知币种回落 1.0。"""
+    return _REFERENCE_FX_RATE.get(currency, 1.0)

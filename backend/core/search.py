@@ -172,7 +172,7 @@ def resolve_meta(market: str, symbol: str) -> dict | None:
         "symbol": symbol,
         "name": name,
         "market": market,
-        "currency": _currency_for(market),
+        "currency": currency_for(market),
         "sector": sector,
         "base_risk": risk,
         "liquidity": liquidity,
@@ -236,7 +236,9 @@ def _fallback_sector(market: str, symbol: str) -> str:
     return sector_map.get(market, "未分类")
 
 
-def _currency_for(market: str) -> str:
+def currency_for(market: str) -> str:
+    """市场 → 本币币种。a-share/fund 为 CNY，us 为 USD，kr 为 KRW，
+    hk 为 HKD，fx 为 MULTI，crypto 为 USDT；未知市场回落 USD。"""
     currency_map = {
         "a-share": "CNY", "fund": "CNY", "us": "USD", "kr": "KRW",
         "hk": "HKD", "fx": "MULTI", "crypto": "USDT",

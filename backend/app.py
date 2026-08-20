@@ -13,6 +13,7 @@ from core.indicators import analyze
 from core.providers import get_kline, get_kline_with_source
 from core.search import search as search_instruments
 from core.universe import MARKETS, UNIVERSE, find_symbol, universe_for
+from core.valuation import currency as currency_util
 
 
 app = FastAPI(
@@ -157,11 +158,14 @@ def compare_symbols(symbols: str = Query("")) -> dict:
         rows = get_kline(mkt, sym, "d", 180, prefer_real=True)
         if not rows:
             continue
+        currency = search.currency_for(mkt)
+        fx_rate = currency_util.reference_fx_rate(currency)
+        local_closes = [r["close"] for r in rows]
         assets.append({
             "symbol": sym,
             "name": token,
             "market": mkt,
-            "currency": "CNY" if mkt in ("a-share", "fund") else "USD",
-            "rmb_closes": [r["close"] for r in rows],
+            "currency": currency,
+            "rmb_closes": currency_util.to_rmb_closes(local_closes, fx_rate),
         })
     return {"items": comparison.compare_assets(assets), "total": len(assets)}
