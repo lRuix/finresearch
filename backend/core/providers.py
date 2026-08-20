@@ -706,14 +706,23 @@ def get_live_fx_rates() -> dict[str, float] | None:
     """实时拉取 USD 基准汇率，换算为「本币 → RMB」参考汇率。
 
     数据源：frankfurter（USD 基准）。返回 {currency: 1本币=多少RMB}，
-    失败返回 None（调用方回退静态值）。
+    任何失败（网络异常/无数据）返回 None（调用方回退静态值）。
+    失败时标记熔断，120 秒内直接返回 None 不再请求。
     """
-    payload = _get_json(
-        "https://api.frankfurter.dev/v1/latest?base=USD&symbols=CNY,HKD,KRW",
-        timeout=6,
-    )
+    fx_key = "fx:live-rates"
+    if _is_dead(fx_key):
+        return None
+    try:
+        payload = _get_json(
+            "https://api.frankfurter.dev/v1/latest?base=USD&symbols=CNY,HKD,KRW",
+            timeout=6,
+        )
+    except Exception:
+        _mark_dead(fx_key)
+        return None
     rates = (payload or {}).get("rates", {})
     if not rates or "CNY" not in rates:
+        _mark_dead(fx_key)
         return None
     cny = float(rates["CNY"])          # 1 USD = cny RMB
     hkd = float(rates.get("HKD", 7.84))  # 1 USD = hkd HKD
