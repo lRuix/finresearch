@@ -46,6 +46,10 @@ def test_detect_market_suffix_consistent_with_bare_code():
     assert resolver.detect_market("510300.SH") == "fund"
     assert resolver.detect_market("600519.SH") == "a-share"
     assert resolver.detect_market("000001.SZ") == "a-share"
+    assert resolver.detect_market("510300") == "fund"
+    assert resolver.detect_market("600519") == "a-share"
+    assert resolver.detect_market("000001") == "a-share"
+    assert resolver.normalize_symbol("fund", "510300.SH") == "510300"
     assert resolver.detect_market("AEROSOL") == "us"
     assert resolver.detect_market("METH") == "us"
     assert resolver.detect_market("中国") is None
@@ -62,7 +66,26 @@ def test_resolve_meta_uses_curated_without_probe():
     resolver = SymbolResolver(datasource=FakeDatasource())
     meta = resolver.resolve_meta("us", "AAPL")
     assert meta is not None
-    assert meta["auto"] is not True
+    assert meta["auto"] is False
+    assert calls["count"] == 0
+
+
+def test_detect_normalize_resolve_chain_hits_curated():
+    calls = {"count": 0}
+
+    class FakeDatasource:
+        def get_klines(self, market, symbol, period, start=None, end=None, limit=180):
+            calls["count"] += 1
+            return []
+
+    resolver = SymbolResolver(datasource=FakeDatasource())
+    market = resolver.detect_market("510300.SH")
+    symbol = resolver.normalize_symbol(market, "510300.SH")
+    assert (market, symbol) == ("fund", "510300")
+    meta = resolver.resolve_meta(market, symbol)
+    assert meta is not None
+    assert meta["symbol"] == "510300"
+    assert meta["auto"] is False
     assert calls["count"] == 0
 
 

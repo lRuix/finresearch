@@ -59,7 +59,7 @@ class SymbolResolver:
         if market == "hk":
             code = sym.split(".")[0]
             return f"{code}.HK"
-        if market == "a-share":
+        if market in ("a-share", "fund"):
             return sym.split(".")[0]
         if market == "fx":
             code = sym.split("=")[0]
