@@ -1,4 +1,9 @@
-"""Request/response contracts. Response shapes stay compatible with the old API."""
+"""Request parameter contracts.
+
+Response shapes stay compatible with the old API except:
+- /api/recommend returns the new factor/sentiment/total_score shape;
+- /api/kline source values are extended with "local" (frontend types not yet updated).
+"""
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
