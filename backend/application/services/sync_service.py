@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from application.ports import MarketDataSource, MarketDataRepository
+from domain.models import KlineRow
 
 
 class SyncService:
@@ -11,8 +12,10 @@ class SyncService:
         self._datasource = datasource
 
     def sync(self, market: str, symbol: str, period: str,
-             start: str | None = None, end: str | None = None) -> tuple[list, str]:
+             start: str | None = None, end: str | None = None) -> tuple[list[KlineRow], str]:
         watermark = self._repository.get_watermark(market, symbol, period)
+        if end and watermark and watermark >= end:
+            return [], "local"
         gap_start = start
         if watermark and (gap_start is None or watermark > gap_start):
             gap_start = watermark

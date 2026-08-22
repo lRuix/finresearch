@@ -76,3 +76,54 @@ def test_sync_uses_existing_watermark_as_start():
 
     SyncService(repo, RecordingDatasource()).sync("us", "AAPL", "d")
     assert captured["start"] == "2026-08-22"
+
+
+def test_sync_short_circuits_when_watermark_covers_end():
+    repo = FakeRepository()
+    repo.watermarks[("us", "AAPL", "d")] = "2026-08-23"
+    called = {"count": 0}
+
+    class RecordingDatasource:
+        def get_klines_with_source(self, market, symbol, period,
+                                   start=None, end=None, limit=180):
+            called["count"] += 1
+            return [], "live"
+
+        def get_klines(self, market, symbol, period, start=None, end=None, limit=180):
+            rows, source = self.get_klines_with_source(market, symbol, period, start, end, limit)
+            return rows
+
+    rows, source = SyncService(repo, RecordingDatasource()).sync(
+        "us", "AAPL", "d", end="2026-08-23",
+    )
+    assert rows == []
+    assert source == "local"
+    assert called["count"] == 0
+
+
+def test_sync_empty_rows_does_not_advance():
+    repo = FakeRepository()
+    service = SyncService(repo, FakeDatasource(rows=[]))
+    rows, _ = service.sync("us", "AAPL", "d")
+    assert rows == []
+    assert repo.upserted == []
+    assert repo.watermarks == {}
+
+
+def test_sync_keeps_caller_start_when_later_than_watermark():
+    repo = FakeRepository()
+    repo.watermarks[("us", "AAPL", "d")] = "2026-08-22"
+    captured = {}
+
+    class RecordingDatasource:
+        def get_klines_with_source(self, market, symbol, period,
+                                   start=None, end=None, limit=180):
+            captured["start"] = start
+            return [], "mock"
+
+        def get_klines(self, market, symbol, period, start=None, end=None, limit=180):
+            rows, source = self.get_klines_with_source(market, symbol, period, start, end, limit)
+            return rows
+
+    SyncService(repo, RecordingDatasource()).sync("us", "AAPL", "d", start="2026-08-25")
+    assert captured["start"] == "2026-08-25"

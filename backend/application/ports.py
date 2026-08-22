@@ -29,10 +29,12 @@ class MarketDataSource(Protocol):
     def list_instruments(self, market: str, top_n: int) -> list[Instrument]: ...
     def get_klines(self, market: str, symbol: str, period: str,
                    start: str | None = None, end: str | None = None,
-                   limit: int = 180) -> list[KlineRow]: ...
+                   limit: int = 180) -> list[KlineRow]:
+        """Return klines with time > start and time <= end (start is exclusive)."""
     def get_klines_with_source(self, market: str, symbol: str, period: str,
                                start: str | None = None, end: str | None = None,
-                               limit: int = 180) -> tuple[list[KlineRow], str]: ...
+                               limit: int = 180) -> tuple[list[KlineRow], str]:
+        """Return (klines, source) with time > start and time <= end (start is exclusive)."""
     def get_live_fx_rates(self) -> dict[str, float] | None: ...
 
 
