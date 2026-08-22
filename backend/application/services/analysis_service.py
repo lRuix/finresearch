@@ -1,41 +1,53 @@
 """Single-instrument analysis orchestration."""
 from __future__ import annotations
 
-from application.ports import MacroNewsProvider, MarketDataRepository
+from application.ports import (
+    FxRateProvider,
+    MacroNewsProvider,
+    MarketDataRepository,
+)
 from application.services.sync_service import SyncService
 from application.services.symbol_resolver import SymbolResolver
 from domain.indicators import analyze
+
+
+def _kline_dict(row) -> dict:
+    return {
+        "time": row.time, "open": row.open, "high": row.high,
+        "low": row.low, "close": row.close, "volume": row.volume,
+    }
 
 
 class AnalysisService:
     def __init__(self, repository: MarketDataRepository,
                  sync_service: SyncService,
                  symbol_resolver: SymbolResolver,
-                 macro_news: MacroNewsProvider):
+                 macro_news: MacroNewsProvider,
+                 fx_provider: FxRateProvider | None = None):
         self._repository = repository
         self._sync = sync_service
         self._resolver = symbol_resolver
         self._macro = macro_news
+        self._fx = fx_provider
+
+    def _ensure_klines(self, market: str, symbol: str, period: str,
+                       prefer_real: bool = True) -> list:
+        rows = self._repository.get_klines(market, symbol, period)
+        if not rows or len(rows) < 30:
+            self._sync.sync(market, symbol, period, prefer_real=prefer_real)
+            rows = self._repository.get_klines(market, symbol, period)
+        return rows
 
     def analyze(self, market: str, symbol: str) -> dict:
         meta = self._resolver.resolve_meta(market, symbol)
         if meta is None:
             return {"error": "symbol not found"}
-        rows = self._repository.get_klines(market, symbol, "d")
-        if not rows:
-            self._sync.sync(market, symbol, "d")
-            rows = self._repository.get_klines(market, symbol, "d")
+        rows = self._ensure_klines(market, symbol, "d")
         if not rows:
             return {"error": "no kline data", "market": market, "symbol": symbol}
         enriched = dict(meta)
         enriched["macro_score"] = self._macro.macro_score(market)
-        kline_dicts = [
-            {
-                "time": row.time, "open": row.open, "high": row.high,
-                "low": row.low, "close": row.close, "volume": row.volume,
-            }
-            for row in rows
-        ]
+        kline_dicts = [_kline_dict(row) for row in rows]
         result = analyze(kline_dicts, enriched)
         return {
             "meta": meta,
@@ -46,12 +58,20 @@ class AnalysisService:
 
     def kline(self, market: str, symbol: str, period: str,
               limit: int, prefer_real: bool = True) -> tuple[list[dict], str]:
+        """Return (items, source). 'local' means served from the local repository."""
         rows = self._repository.get_klines(market, symbol, period)
         if rows:
-            return [row.__dict__ for row in rows[-limit:]], "local"
-        _, source = self._sync.sync(market, symbol, period)
+            return [_kline_dict(row) for row in rows[-limit:]], "local"
+        _, source = self._sync.sync(market, symbol, period, prefer_real=prefer_real)
         rows = self._repository.get_klines(market, symbol, period)
-        return [row.__dict__ for row in rows[-limit:]], source if rows else "mock"
+        return [_kline_dict(row) for row in rows[-limit:]], source if rows else "mock"
+
+    def _market_sentiment(self, market: str) -> float:
+        scores = [item.get("sentiment") for item in self._macro.news_items(market)]
+        scores = [float(s) for s in scores if s is not None]
+        if not scores:
+            return 0.0
+        return round(sum(scores) / len(scores), 4)
 
     def recommend(self, market: str, symbol: str) -> dict:
         """Compatibility shape for the legacy /api/recommend endpoint."""
@@ -61,27 +81,19 @@ class AnalysisService:
         meta = self._resolver.resolve_meta(market, symbol)
         if meta is None:
             return {"error": "symbol not found"}
-        rows = self._repository.get_klines(market, symbol, "d")
-        if not rows:
-            self._sync.sync(market, symbol, "d")
-            rows = self._repository.get_klines(market, symbol, "d")
+        rows = self._ensure_klines(market, symbol, "d")
         if not rows:
             return {"error": "no kline data", "market": market, "symbol": symbol}
         currency = meta.get("currency") or self._resolver.currency_for(market)
+        fx_rate = self._fx.reference_fx_rate(currency) if self._fx else None
         ctx = AnalysisContext(
             symbol=symbol,
             market=market,
             currency=currency,
-            klines=[
-                {
-                    "time": row.time, "open": row.open, "high": row.high,
-                    "low": row.low, "close": row.close, "volume": row.volume,
-                }
-                for row in rows
-            ],
+            klines=[_kline_dict(row) for row in rows],
             macro_bias=self._macro.macro_score(market),
-            news_sentiment=0.0,
-            fx_rate=None,
+            news_sentiment=self._market_sentiment(market),
+            fx_rate=fx_rate,
             horizon="short",
         )
         engine = build_engine()

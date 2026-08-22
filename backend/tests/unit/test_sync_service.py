@@ -24,13 +24,17 @@ class FakeDatasource:
         self.error = error
 
     def get_klines_with_source(self, market, symbol, period,
-                               start=None, end=None, limit=180):
+                               start=None, end=None, limit=180,
+                               prefer_real: bool = True):
         if self.error:
             raise self.error
         return self.rows, "live"
 
-    def get_klines(self, market, symbol, period, start=None, end=None, limit=180):
-        rows, _ = self.get_klines_with_source(market, symbol, period, start, end, limit)
+    def get_klines(self, market, symbol, period, start=None, end=None, limit=180,
+                   prefer_real: bool = True):
+        rows, _ = self.get_klines_with_source(
+            market, symbol, period, start, end, limit, prefer_real,
+        )
         return rows
 
 
@@ -66,12 +70,16 @@ def test_sync_uses_existing_watermark_as_start():
 
     class RecordingDatasource:
         def get_klines_with_source(self, market, symbol, period,
-                                   start=None, end=None, limit=180):
+                                   start=None, end=None, limit=180,
+                                   prefer_real: bool = True):
             captured["start"] = start
             return [], "mock"
 
-        def get_klines(self, market, symbol, period, start=None, end=None, limit=180):
-            rows, source = self.get_klines_with_source(market, symbol, period, start, end, limit)
+        def get_klines(self, market, symbol, period, start=None, end=None, limit=180,
+                       prefer_real: bool = True):
+            rows, source = self.get_klines_with_source(
+                market, symbol, period, start, end, limit, prefer_real,
+            )
             return rows
 
     SyncService(repo, RecordingDatasource()).sync("us", "AAPL", "d")
@@ -85,12 +93,16 @@ def test_sync_short_circuits_when_watermark_covers_end():
 
     class RecordingDatasource:
         def get_klines_with_source(self, market, symbol, period,
-                                   start=None, end=None, limit=180):
+                                   start=None, end=None, limit=180,
+                                   prefer_real: bool = True):
             called["count"] += 1
             return [], "live"
 
-        def get_klines(self, market, symbol, period, start=None, end=None, limit=180):
-            rows, source = self.get_klines_with_source(market, symbol, period, start, end, limit)
+        def get_klines(self, market, symbol, period, start=None, end=None, limit=180,
+                       prefer_real: bool = True):
+            rows, source = self.get_klines_with_source(
+                market, symbol, period, start, end, limit, prefer_real,
+            )
             return rows
 
     rows, source = SyncService(repo, RecordingDatasource()).sync(
@@ -117,12 +129,16 @@ def test_sync_keeps_caller_start_when_later_than_watermark():
 
     class RecordingDatasource:
         def get_klines_with_source(self, market, symbol, period,
-                                   start=None, end=None, limit=180):
+                                   start=None, end=None, limit=180,
+                                   prefer_real: bool = True):
             captured["start"] = start
             return [], "mock"
 
-        def get_klines(self, market, symbol, period, start=None, end=None, limit=180):
-            rows, source = self.get_klines_with_source(market, symbol, period, start, end, limit)
+        def get_klines(self, market, symbol, period, start=None, end=None, limit=180,
+                       prefer_real: bool = True):
+            rows, source = self.get_klines_with_source(
+                market, symbol, period, start, end, limit, prefer_real,
+            )
             return rows
 
     SyncService(repo, RecordingDatasource()).sync("us", "AAPL", "d", start="2026-08-25")

@@ -38,15 +38,18 @@ class ProviderDataSource:
 
     def get_klines(self, market: str, symbol: str, period: str,
                    start: str | None = None, end: str | None = None,
-                   limit: int = 180) -> list[KlineRow]:
-        rows, _ = self.get_klines_with_source(market, symbol, period, start, end, limit)
+                   limit: int = 180, prefer_real: bool = True) -> list[KlineRow]:
+        rows, _ = self.get_klines_with_source(
+            market, symbol, period, start, end, limit, prefer_real,
+        )
         return rows
 
     def get_klines_with_source(self, market: str, symbol: str, period: str,
                                start: str | None = None, end: str | None = None,
-                               limit: int = 180) -> tuple[list[KlineRow], str]:
+                               limit: int = 180,
+                               prefer_real: bool = True) -> tuple[list[KlineRow], str]:
         rows, source = providers.get_kline_with_source(
-            market, symbol, period, limit, prefer_real=True,
+            market, symbol, period, limit, prefer_real=prefer_real,
         )
         if start:
             rows = [row for row in rows if row["time"] > start]
