@@ -96,7 +96,7 @@ class ScreeningService:
                max_risk: float = 100, min_trend: float = 0,
                min_momentum: float = 0, min_rsi: float = 0,
                max_rsi: float = 100, sort_by: str = "total_score",
-               limit: int = 60, candidates_per_market: int = 0) -> dict:
+               limit: int | None = 60, candidates_per_market: int = 0) -> dict:
         items = self._candidate_pool(market, candidates_per_market)
 
         def build(item):

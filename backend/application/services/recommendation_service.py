@@ -62,14 +62,21 @@ class RecommendationService:
         picked.sort(key=lambda item: item["total_score"], reverse=True)
         picked = picked[:limit]
         market_presence = {item["market"] for item in picked}
-        protected = {"fx", "crypto"}
-        for required in ("fx", "crypto"):
+        protected = ("fx", "crypto")
+        for required in protected:
             if required in market_presence:
                 continue
             fallback = next((item for item in results if item["market"] == required), None)
             if fallback is None:
                 continue
-            removable = [item for item in picked if item["market"] not in protected]
+            keep_one = {market: False for market in protected}
+            removable: list[dict] = []
+            for item in picked:
+                if item["market"] in protected:
+                    if not keep_one[item["market"]]:
+                        keep_one[item["market"]] = True
+                        continue
+                removable.append(item)
             if not removable:
                 break
             lowest = min(removable, key=lambda item: item["total_score"])

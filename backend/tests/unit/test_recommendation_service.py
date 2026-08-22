@@ -56,6 +56,39 @@ def test_pick_keeps_fx_and_crypto_when_limit_small():
     assert {"fx", "crypto"} <= markets
 
 
+def test_pick_keeps_fx_and_crypto_when_limit_two_crypto_dominates():
+    service = RecommendationService(MagicMock(), MagicMock())
+    results = [
+        _item("fx", "FX", 10),
+        _item("crypto", "C1", 99),
+        _item("crypto", "C2", 98),
+    ]
+    picked = service._pick(results, 2)
+    markets = {item["market"] for item in picked}
+    assert {"fx", "crypto"} <= markets
+
+
+def test_recommendation_miss_enforces_market_quotas():
+    repo = MagicMock()
+    repo.get_evaluation.return_value = None
+    screening = MagicMock()
+    screening.screen.return_value = {
+        "items": _results(), "count": 10, "total_universe": 10,
+    }
+    service = RecommendationService(repo, screening)
+    result = service.recommend(limit=10)
+    counts = {}
+    for item in result["items"]:
+        counts[item["market"]] = counts.get(item["market"], 0) + 1
+    assert counts == {
+        "a-share": 2, "us": 2, "kr": 1, "hk": 1, "fund": 1,
+        "fx": 1, "crypto": 2,
+    }
+    assert result["items"] == sorted(
+        result["items"], key=lambda item: item["total_score"], reverse=True,
+    )
+
+
 def test_pick_empty_results():
     service = RecommendationService(MagicMock(), MagicMock())
     assert service._pick([], 10) == []
