@@ -1,6 +1,7 @@
 """SQLite implementation of MarketDataRepository."""
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import sqlite3
 import threading
@@ -79,15 +80,16 @@ class SqliteMarketDataRepository:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
     def _init_schema(self) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             conn.executescript(_SCHEMA)
             conn.commit()
 
     def upsert_instruments(self, items: list[Instrument]) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO instruments
@@ -107,7 +109,7 @@ class SqliteMarketDataRepository:
 
     def upsert_klines(self, market: str, symbol: str, period: str,
                       rows: list[KlineRow]) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO klines
@@ -124,6 +126,10 @@ class SqliteMarketDataRepository:
 
     def get_klines(self, market: str, symbol: str, period: str,
                    start: str | None = None, end: str | None = None) -> list[KlineRow]:
+        """Return klines in ascending ISO time order.
+
+        start / end are inclusive bounds; time strings are compared as ISO text.
+        """
         sql = """
             SELECT time, open, high, low, close, volume FROM klines
             WHERE market = ? AND symbol = ? AND period = ?
@@ -136,12 +142,12 @@ class SqliteMarketDataRepository:
             sql += " AND time <= ?"
             params.append(end)
         sql += " ORDER BY time ASC"
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             rows = conn.execute(sql, params).fetchall()
         return [KlineRow(**dict(row)) for row in rows]
 
     def get_watermark(self, market: str, symbol: str, period: str) -> str | None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT as_of FROM sync_watermarks WHERE market = ? AND symbol = ? AND period = ?",
                 (market, symbol, period),
@@ -149,7 +155,7 @@ class SqliteMarketDataRepository:
         return row["as_of"] if row else None
 
     def set_watermark(self, market: str, symbol: str, period: str, as_of: str) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO sync_watermarks
@@ -161,7 +167,11 @@ class SqliteMarketDataRepository:
             conn.commit()
 
     def upsert_snapshot(self, date: str, market: str, items: list[dict]) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "DELETE FROM market_snapshots WHERE date = ? AND market = ?",
+                (date, market),
+            )
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO market_snapshots
@@ -179,7 +189,7 @@ class SqliteMarketDataRepository:
             conn.commit()
 
     def get_snapshot(self, date: str, market: str) -> list[dict]:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             rows = conn.execute(
                 """
                 SELECT symbol, name, turnover, market_cap, rank
@@ -193,7 +203,7 @@ class SqliteMarketDataRepository:
 
     def save_evaluation(self, evaluated_on: str, market: str, symbol: str,
                         score: float, payload: dict) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO evaluations
@@ -205,7 +215,7 @@ class SqliteMarketDataRepository:
             conn.commit()
 
     def get_evaluation(self, evaluated_on: str, market: str, symbol: str) -> dict | None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
                 """
                 SELECT payload FROM evaluations
@@ -213,4 +223,9 @@ class SqliteMarketDataRepository:
                 """,
                 (evaluated_on, market, symbol),
             ).fetchone()
-        return json.loads(row["payload"]) if row else None
+        if row is None:
+            return None
+        try:
+            return json.loads(row["payload"])
+        except (ValueError, TypeError):
+            return None

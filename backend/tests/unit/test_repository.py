@@ -78,3 +78,29 @@ def test_instruments_upsert_uses_timestamp(tmp_path):
     conn.close()
     assert row is not None
     assert "+00:00" in row[0]
+
+
+def test_snapshot_upsert_replaces_full_day(tmp_path):
+    repo = SqliteMarketDataRepository(tmp_path / "research.db")
+    repo.upsert_snapshot("2026-08-23", "us", [
+        {"symbol": "AAPL", "name": "Apple", "turnover": 1e9, "market_cap": 3e12},
+        {"symbol": "MSFT", "name": "Microsoft", "turnover": 8e8, "market_cap": 3e12},
+    ])
+    repo.upsert_snapshot("2026-08-23", "us", [
+        {"symbol": "TSLA", "name": "Tesla", "turnover": 7e8, "market_cap": 1e12},
+    ])
+    items = repo.get_snapshot("2026-08-23", "us")
+    assert [item["symbol"] for item in items] == ["TSLA"]
+
+
+def test_get_evaluation_tolerates_corrupt_payload(tmp_path):
+    repo = SqliteMarketDataRepository(tmp_path / "research.db")
+    repo.save_evaluation("2026-08-23", "us", "AAPL", 80.0, {"score": 80.0})
+    conn = sqlite3.connect(tmp_path / "research.db")
+    conn.execute(
+        "UPDATE evaluations SET payload = ? WHERE evaluated_on = ? AND market = ? AND symbol = ?",
+        ("{broken", "2026-08-23", "us", "AAPL"),
+    )
+    conn.commit()
+    conn.close()
+    assert repo.get_evaluation("2026-08-23", "us", "AAPL") is None
