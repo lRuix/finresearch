@@ -116,7 +116,7 @@ class ScreeningService:
         key = allowed_sort.get(sort_by, "total_score")
         results.sort(key=lambda item: item[key], reverse=True)
         return {
-            "items": results[:limit],
+            "items": results if limit is None else results[:limit],
             "count": len(results),
             "total_universe": len(items),
         }

@@ -155,3 +155,14 @@ def test_screen_tolerates_none_base_risk():
     result = service.screen(market="us")
     assert result["total_universe"] == 1
     assert result["items"][0]["symbol"] == "NONE"
+
+
+def test_screen_limit_none_returns_all():
+    repo = MagicMock()
+    repo.get_klines.return_value = _rows()
+    service = _service(
+        repo=repo,
+        candidates=[_candidate("A"), _candidate("B")],
+    )
+    result = service.screen(market="us", limit=None)
+    assert len(result["items"]) == 2

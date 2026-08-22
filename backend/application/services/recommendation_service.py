@@ -28,7 +28,7 @@ class RecommendationService:
         results = self._screening.screen(
             market="all",
             candidates_per_market=candidates_per_market,
-            limit=100,
+            limit=None,
         )
         picked = self._pick(results["items"], limit)
         payload = {
@@ -59,15 +59,22 @@ class RecommendationService:
                 break
             picked.append(item)
             picked_keys.add((item["market"], item["symbol"]))
+        picked.sort(key=lambda item: item["total_score"], reverse=True)
+        picked = picked[:limit]
         market_presence = {item["market"] for item in picked}
+        protected = {"fx", "crypto"}
         for required in ("fx", "crypto"):
             if required in market_presence:
                 continue
             fallback = next((item for item in results if item["market"] == required), None)
-            if fallback is not None:
-                lowest = min(picked, key=lambda item: item["total_score"])
-                picked.remove(lowest)
-                picked.append(fallback)
-                market_presence.add(required)
+            if fallback is None:
+                continue
+            removable = [item for item in picked if item["market"] not in protected]
+            if not removable:
+                break
+            lowest = min(removable, key=lambda item: item["total_score"])
+            picked.remove(lowest)
+            picked.append(fallback)
+            market_presence.add(required)
         picked.sort(key=lambda item: item["total_score"], reverse=True)
         return picked[:limit]
