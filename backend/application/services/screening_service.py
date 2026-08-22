@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 from application.ports import MacroNewsProvider, MarketDataSource, MarketDataRepository
 from application.services.screening_helpers import asset_type, build_reasons, market_name
 from application.services.sync_service import SyncService
-from application.services.symbol_resolver import SymbolResolver
 from domain.indicators import analyze
 from domain.universe_data import MARKETS, universe_for
 
@@ -14,13 +13,11 @@ from domain.universe_data import MARKETS, universe_for
 class ScreeningService:
     def __init__(self, repository: MarketDataRepository,
                  sync_service: SyncService,
-                 symbol_resolver: SymbolResolver,
                  macro_news: MacroNewsProvider,
                  datasource: MarketDataSource,
                  candidates: list[dict] | None = None):
         self._repository = repository
         self._sync = sync_service
-        self._resolver = symbol_resolver
         self._macro = macro_news
         self._datasource = datasource
         self._candidates = candidates
@@ -64,7 +61,7 @@ class ScreeningService:
         if "error" in analysis:
             return None
         rsi = analysis["rsi14"] or 50
-        risk = (1 - item["base_risk"]) * 100
+        risk = (1 - (item.get("base_risk") or 0.65)) * 100
         if (analysis["total_score"] < min_score or risk > max_risk
                 or analysis["trend_score"] < min_trend
                 or analysis["momentum_score"] < min_momentum

@@ -111,14 +111,16 @@ def build_reasons(item: dict, analysis: dict, macro_news: MacroNewsProvider) -> 
             "weight": round(float(bias["score"]) * 0.92),
         })
     used_titles = {reason["title"] for reason in reasons}
+    event_reasons: list[dict] = []
     for news in macro_news.news_items(market_id):
         reason = _reason_from_news(news, market_label)
         if reason["title"] in used_titles:
             continue
         used_titles.add(reason["title"])
-        reasons.append(reason)
-        if len(reasons) >= 7:
+        event_reasons.append(reason)
+        if len(event_reasons) >= 3:
             break
+    reasons.extend(event_reasons)
     if not reasons:
         reasons.append({
             "type": "technical", "label": REASON_LABELS["technical"],
