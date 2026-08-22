@@ -1,6 +1,4 @@
 """SymbolResolver tests using fake datasource."""
-from unittest.mock import patch
-
 from application.services.symbol_resolver import SymbolResolver
 from domain.models import KlineRow
 
@@ -28,3 +26,50 @@ def test_resolve_meta_probes_datasource_when_not_curated():
     assert meta is not None
     assert meta["symbol"] == "ZZZZ"
     assert meta["auto"] is True
+
+
+def test_normalize_crypto_no_duplicate_suffix():
+    resolver = SymbolResolver(datasource=None)
+    assert resolver.normalize_symbol("crypto", "BTCUSDT") == "BTCUSDT"
+    assert resolver.normalize_symbol("crypto", "BTC") == "BTCUSDT"
+
+
+def test_normalize_kr_keeps_kq_and_ashare_strips_suffix():
+    resolver = SymbolResolver(datasource=None)
+    assert resolver.normalize_symbol("kr", "005930.KQ") == "005930.KQ"
+    assert resolver.normalize_symbol("kr", "005930.KS") == "005930.KS"
+    assert resolver.normalize_symbol("a-share", "600519.SH") == "600519"
+
+
+def test_detect_market_suffix_consistent_with_bare_code():
+    resolver = SymbolResolver(datasource=None)
+    assert resolver.detect_market("510300.SH") == "fund"
+    assert resolver.detect_market("600519.SH") == "a-share"
+    assert resolver.detect_market("000001.SZ") == "a-share"
+    assert resolver.detect_market("AEROSOL") == "us"
+    assert resolver.detect_market("METH") == "us"
+    assert resolver.detect_market("中国") is None
+
+
+def test_resolve_meta_uses_curated_without_probe():
+    calls = {"count": 0}
+
+    class FakeDatasource:
+        def get_klines(self, market, symbol, period, start=None, end=None, limit=180):
+            calls["count"] += 1
+            return []
+
+    resolver = SymbolResolver(datasource=FakeDatasource())
+    meta = resolver.resolve_meta("us", "AAPL")
+    assert meta is not None
+    assert meta["auto"] is not True
+    assert calls["count"] == 0
+
+
+def test_resolve_meta_none_when_no_rows():
+    class FakeDatasource:
+        def get_klines(self, market, symbol, period, start=None, end=None, limit=180):
+            return []
+
+    resolver = SymbolResolver(datasource=FakeDatasource())
+    assert resolver.resolve_meta("us", "ZZZZ") is None

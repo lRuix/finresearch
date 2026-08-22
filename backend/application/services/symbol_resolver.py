@@ -7,8 +7,8 @@ from domain.universe_data import find_symbol
 
 
 _A_SHARE_SH = ("5", "6", "9")
-_CRYPTO_SUFFIXES = ("USDT", "USDC", "BUSD", "BTC", "ETH", "SOL", "BNB",
-                    "XRP", "DOGE", "ADA", "AVAX", "LINK")
+_CRYPTO_SUFFIXES = ("USDT", "USDC", "BUSD")
+_SHORT_CRYPTO = {"BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK"}
 _FX_PAIRS = {
     "USDCNY", "USDCNH", "EURUSD", "GBPUSD", "USDJPY", "USDHKD", "USDSGD",
     "AUDUSD", "NZDUSD", "USDCAD", "USDCHF", "EURGBP", "EURJPY", "GBPJPY",
@@ -28,10 +28,17 @@ class SymbolResolver:
         if q.endswith(".HK"):
             return "hk"
         if q.endswith((".SS", ".SH", ".SZ")):
+            digits = q.split(".")[0]
+            if digits.isdigit() and len(digits) == 6:
+                if digits.startswith(("1", "5")):
+                    return "fund"
+                return "a-share"
             return "a-share"
         if q.endswith("=X") or q in _FX_PAIRS:
             return "fx"
-        if any(q.endswith(s) for s in _CRYPTO_SUFFIXES):
+        if q.endswith(_CRYPTO_SUFFIXES):
+            return "crypto"
+        if q in _SHORT_CRYPTO:
             return "crypto"
         if q.isdigit():
             if len(q) == 6:
@@ -39,20 +46,28 @@ class SymbolResolver:
                     return "fund" if q.startswith("5") else "a-share"
                 return "fund" if q.startswith(("1", "5")) else "a-share"
             return None
-        if q.isalpha():
+        if q.isascii() and q.isalpha():
             return "us"
         return None
 
     def normalize_symbol(self, market: str, symbol: str) -> str:
         sym = symbol.strip().upper()
         if market == "kr":
-            return f"{sym.split('.')[0]}.KS"
+            code = sym.split(".")[0]
+            suffix = ".KQ" if sym.endswith(".KQ") else ".KS"
+            return f"{code}{suffix}"
         if market == "hk":
-            return f"{sym.split('.')[0]}.HK"
+            code = sym.split(".")[0]
+            return f"{code}.HK"
+        if market == "a-share":
+            return sym.split(".")[0]
         if market == "fx":
-            return f"{sym.split('=')[0]}=X"
+            code = sym.split("=")[0]
+            return f"{code}=X"
         if market == "crypto":
             code = sym.split("_")[0].split("-")[0].split("/")[0]
+            if code.endswith(_CRYPTO_SUFFIXES):
+                return code
             return f"{code}USDT"
         return sym
 
@@ -65,7 +80,7 @@ class SymbolResolver:
     def resolve_meta(self, market: str, symbol: str) -> dict | None:
         curated = find_symbol(market, symbol)
         if curated is not None:
-            return dict(curated)
+            return {**curated, "auto": False}
         rows = self._datasource.get_klines(market, symbol, "d", limit=60)
         if not rows:
             return None
