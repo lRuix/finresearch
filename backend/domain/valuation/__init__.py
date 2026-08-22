@@ -1,0 +1,1 @@
+"""Pure valuation logic."""
