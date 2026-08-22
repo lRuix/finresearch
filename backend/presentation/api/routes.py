@@ -66,12 +66,12 @@ def recommendations(limit: int = Query(10, ge=1, le=20),
 
 @router.get("/api/macro")
 def macro_payload(live_news: bool = Query(False)) -> dict:
-    return container.macro_payload(live_news)
+    return container.macro_service.macro_payload(live_news)
 
 
 @router.get("/api/search")
 def search_instruments_endpoint(q: str = Query("", max_length=64)) -> dict:
-    return container.search(q)
+    return container.search_service.search(q)
 
 
 @router.get("/api/recommend")

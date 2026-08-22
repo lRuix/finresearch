@@ -32,6 +32,7 @@ def wired_container():
         datasource=datasource,
     )
     yield routes.container
+    routes.container = build_container(AppConfig(db_path=Path(tempfile.mkdtemp()) / "restore.db"))
 
 
 def test_health_and_markets():
@@ -65,3 +66,49 @@ def test_recommendations_contract_shape():
     client = TestClient(app)
     payload = client.get("/api/recommendations?limit=5").json()
     assert set(payload) >= {"items", "count", "total_universe", "updated_at"}
+
+
+def test_analyze_contract_shape():
+    client = TestClient(app)
+    payload = client.get("/api/analyze?market=us&symbol=AAPL").json()
+    assert set(payload) >= {"meta", "macro_bias", "analysis", "kline_count"}
+
+
+def test_recommend_contract_shape():
+    client = TestClient(app)
+    payload = client.get("/api/recommend?market=us&symbol=AAPL").json()
+    assert set(payload) >= {
+        "factor_scores", "factor_details", "sentiment", "total_score", "detail",
+    }
+
+
+def test_compare_contract_shape():
+    client = TestClient(app)
+    payload = client.get("/api/compare?symbols=AAPL,600519").json()
+    assert set(payload) >= {"items", "total"}
+
+
+def test_macro_contract_shape():
+    client = TestClient(app)
+    payload = client.get("/api/macro").json()
+    assert set(payload) >= {"snapshot", "news", "bias", "universe_size"}
+
+
+def test_search_contract_shape():
+    client = TestClient(app)
+    payload = client.get("/api/search?q=AAPL").json()
+    assert set(payload) >= {"query", "items", "total"}
+
+
+def test_recommendations_forwards_query_params():
+    from unittest.mock import patch
+
+    client = TestClient(app)
+    payload = {"items": [], "count": 0, "total_universe": 0}
+    with patch.object(
+        routes.container.recommendation_service,
+        "recommend",
+        return_value=payload,
+    ) as mock_rec:
+        client.get("/api/recommendations", params={"limit": 8, "candidates_per_market": 30})
+    assert mock_rec.call_args.args == (8, 30)

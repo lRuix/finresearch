@@ -38,6 +38,7 @@ class MarketDataSource(Protocol):
                                prefer_real: bool = True) -> tuple[list[KlineRow], str]:
         """Return (klines, source) with time > start and time <= end (start is exclusive)."""
     def get_live_fx_rates(self) -> dict[str, float] | None: ...
+    def reference_fx_rate(self, currency: str) -> float: ...
 
 
 class FxRateProvider(Protocol):
