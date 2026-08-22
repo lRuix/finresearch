@@ -61,7 +61,10 @@ class ScreeningService:
         if "error" in analysis:
             return None
         rsi = analysis["rsi14"] or 50
-        risk = (1 - (item.get("base_risk") or 0.65)) * 100
+        base_risk = item.get("base_risk", 0.65)
+        if base_risk is None:
+            base_risk = 0.65
+        risk = (1 - base_risk) * 100
         if (analysis["total_score"] < min_score or risk > max_risk
                 or analysis["trend_score"] < min_trend
                 or analysis["momentum_score"] < min_momentum

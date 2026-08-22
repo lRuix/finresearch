@@ -2,6 +2,7 @@
 from unittest.mock import MagicMock
 
 from application.services.screening_service import ScreeningService
+from application.services.screening_helpers import build_reasons
 from domain.models import Instrument, KlineRow
 from domain.universe_data import universe_for
 
@@ -102,3 +103,44 @@ def test_screen_uses_builtin_universe():
     service = _service(repo=repo)
     result = service.screen(market="us")
     assert result["total_universe"] == len(universe_for("us"))
+
+
+def test_build_reasons_limits_news_and_sorts_by_weight():
+    macro = MagicMock()
+    macro.market_bias.return_value = None
+    macro.news_items.return_value = [
+        {"tags": ["全球"], "title": "low", "source": "S", "sentiment": -1.0},
+        {"tags": ["全球"], "title": "high", "source": "S", "sentiment": 1.0},
+        {"tags": ["全球"], "title": "mid", "source": "S", "sentiment": 0.0},
+        {"tags": ["全球"], "title": "extra", "source": "S", "sentiment": 0.0},
+    ]
+    analysis = {
+        "trend_score": 0.0, "macd_hist": None, "rsi14": 30.0,
+        "change_20d": 0.0, "momentum_score": 50.0,
+    }
+    reasons = build_reasons(
+        {"market": "us", "symbol": "AAPL", "name": "Apple"},
+        analysis,
+        macro,
+    )
+    assert [reason["title"] for reason in reasons] == ["high", "mid", "low"]
+
+
+def test_screen_treats_zero_base_risk_as_zero():
+    repo = MagicMock()
+    repo.get_klines.return_value = _rows()
+    service = _service(repo=repo, candidates=[_candidate("ZERO", base_risk=0.0)])
+    result = service.screen(market="us", max_risk=50)
+    assert result["total_universe"] == 1
+    assert result["items"] == []
+
+
+def test_screen_missing_base_risk_uses_default():
+    repo = MagicMock()
+    repo.get_klines.return_value = _rows()
+    candidate = _candidate("MISSING")
+    candidate.pop("base_risk")
+    service = _service(repo=repo, candidates=[candidate])
+    result = service.screen(market="us", max_risk=50)
+    assert result["total_universe"] == 1
+    assert result["items"][0]["symbol"] == "MISSING"
