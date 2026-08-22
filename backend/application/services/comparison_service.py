@@ -30,7 +30,7 @@ class ComparisonService:
                 continue
             symbol = self._resolver.normalize_symbol(market, token)
             rows = self._repository.get_klines(market, symbol, "d")
-            if not rows:
+            if not rows or len(rows) < 30:
                 self._sync.sync(market, symbol, "d")
                 rows = self._repository.get_klines(market, symbol, "d")
             if not rows:
