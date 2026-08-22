@@ -1414,7 +1414,7 @@ def test_analyze_returns_compatible_shape():
         "currency": "USD", "sector": "tech", "base_risk": 0.3,
         "liquidity": 0.9,
     }
-  service = AnalysisService(repo, sync, resolver, macro)
+    service = AnalysisService(repo, sync, resolver, macro)
     result = service.analyze("us", "AAPL")
     assert result["meta"]["symbol"] == "AAPL"
     assert result["kline_count"] == 60
@@ -1429,7 +1429,7 @@ def test_analyze_returns_compatible_shape():
 """Single-instrument analysis orchestration."""
 from __future__ import annotations
 
-from application.ports import MacroNewsProvider, MarketDataRepository
+from application.ports import FxRateProvider, MacroNewsProvider, MarketDataRepository
 from application.services.sync_service import SyncService
 from application.services.symbol_resolver import SymbolResolver
 from domain.indicators import analyze
@@ -1439,11 +1439,13 @@ class AnalysisService:
     def __init__(self, repository: MarketDataRepository,
                  sync_service: SyncService,
                  symbol_resolver: SymbolResolver,
-                 macro_news: MacroNewsProvider):
+                 macro_news: MacroNewsProvider,
+                 fx_provider: FxRateProvider | None = None):
         self._repository = repository
         self._sync = sync_service
         self._resolver = symbol_resolver
         self._macro = macro_news
+        self._fx = fx_provider
 
     def analyze(self, market: str, symbol: str) -> dict:
         meta = self._resolver.resolve_meta(market, symbol)
@@ -1858,7 +1860,7 @@ def test_screen_returns_expected_shape():
     macro.market_bias.return_value = {"label": "偏多", "score": 60}
     macro.news_items.return_value = []
     service = ScreeningService(
-        repo, sync, resolver, macro, MagicMock(), candidates=[
+        repo, sync, macro, MagicMock(), candidates=[
             {"market": "us", "symbol": "AAPL", "name": "Apple",
              "currency": "USD", "sector": "tech", "base_risk": 0.3,
              "liquidity": 0.9},
@@ -1882,7 +1884,6 @@ from concurrent.futures import ThreadPoolExecutor
 from application.ports import MacroNewsProvider, MarketDataSource, MarketDataRepository
 from application.services.screening_helpers import asset_type, build_reasons, market_name
 from application.services.sync_service import SyncService
-from application.services.symbol_resolver import SymbolResolver
 from domain.indicators import analyze
 from domain.universe_data import MARKETS, universe_for
 
@@ -1890,13 +1891,11 @@ from domain.universe_data import MARKETS, universe_for
 class ScreeningService:
     def __init__(self, repository: MarketDataRepository,
                  sync_service: SyncService,
-                 symbol_resolver: SymbolResolver,
                  macro_news: MacroNewsProvider,
                  datasource: MarketDataSource,
                  candidates: list[dict] | None = None):
         self._repository = repository
         self._sync = sync_service
-        self._resolver = symbol_resolver
         self._macro = macro_news
         self._datasource = datasource
         self._candidates = candidates
@@ -2265,7 +2264,6 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 
-from domain.universe_data import MARKETS, UNIVERSE, universe_for
 from presentation.api.schemas import ScreenQuery
 
 
@@ -2280,19 +2278,20 @@ def health() -> dict:
 
 @router.get("/api/markets")
 def markets() -> dict:
-    return {"items": MARKETS, "total": len(MARKETS)}
+    return container.catalog_service.markets()
 
 
 @router.get("/api/universe")
 def universe(market: str = Query("all")) -> dict:
-    items = universe_for(market)
-    return {"items": items, "total": len(items)}
+    return container.catalog_service.universe(market)
 
 
 @router.get("/api/kline")
 def kline(market: str, symbol: str, period: str = Query("d", pattern="^(h|d|w)$"),
           limit: int = Query(180, ge=30, le=1000), real: bool = Query(True)) -> dict:
-    rows, source = container.analysis_service.kline(market, symbol, period, limit)
+    rows, source = container.analysis_service.kline(
+        market, symbol, period, limit, prefer_real=real,
+    )
     return {
         "market": market, "symbol": symbol, "period": period,
         "count": len(rows), "source": source,
