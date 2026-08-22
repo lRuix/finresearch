@@ -93,23 +93,51 @@ class SymbolResolver:
             "market": market,
             "currency": self.currency_for(market),
             "sector": sector,
-            "base_risk": self._derive_risk(len(closes)),
-            "liquidity": self._derive_liquidity(rows),
+            "base_risk": self._derive_risk(closes, market),
+            "liquidity": self._derive_liquidity(rows, market),
             "auto": True,
             "_probe_price": closes[-1],
         }
 
     @staticmethod
-    def _derive_risk(row_count: int) -> float:
-        return 0.58 if row_count >= 21 else 0.65
+    def _derive_risk(closes: list[float], market: str) -> float:
+        if len(closes) < 21:
+            return 0.65
+        returns = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+        mean = sum(returns) / len(returns)
+        variance = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+        vol20 = (variance ** 0.5) * (252 ** 0.5) if variance >= 0 else None
+        if vol20 is None:
+            return 0.65
+        target = {"fx": 0.06, "fund": 0.14, "a-share": 0.22}.get(market, 0.28)
+        ratio = vol20 / target if target else 1.0
+        if ratio <= 0.6:
+            risk = 0.35
+        elif ratio <= 0.9:
+            risk = 0.45
+        elif ratio <= 1.2:
+            risk = 0.58
+        elif ratio <= 1.7:
+            risk = 0.72
+        elif ratio <= 2.4:
+            risk = 0.84
+        else:
+            risk = 0.93
+        return round(risk, 2)
 
     @staticmethod
-    def _derive_liquidity(rows: list[KlineRow]) -> float:
+    def _derive_liquidity(rows: list[KlineRow], market: str) -> float:
+        if market == "fx":
+            return 0.7
         volumes = [row.volume for row in rows[-20:]]
         if not volumes:
             return 0.7
         mean_volume = sum(volumes) / len(volumes)
-        for floor, score in [(5e7, 0.95), (1e7, 0.85), (3e6, 0.7), (8e5, 0.5)]:
+        if market == "crypto":
+            thresholds = [(2e7, 0.95), (5e6, 0.85), (1e6, 0.7), (2e5, 0.5)]
+        else:
+            thresholds = [(5e7, 0.95), (1e7, 0.85), (3e6, 0.7), (8e5, 0.5)]
+        for floor, score in thresholds:
             if mean_volume >= floor:
                 return score
         return 0.35

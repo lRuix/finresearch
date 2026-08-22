@@ -1,12 +1,15 @@
 """Macro service: snapshot, news and market bias payload."""
 from __future__ import annotations
 
-from infrastructure.datasources import macro_data as macro
+from application.ports import MacroNewsProvider
 from domain.universe_data import UNIVERSE
 
 
 class MacroService:
+    def __init__(self, macro_news: MacroNewsProvider):
+        self._macro_news = macro_news
+
     def macro_payload(self, live_news: bool = False) -> dict:
-        payload = macro.macro_payload(live_news=live_news)
+        payload = self._macro_news.macro_payload(live_news)
         payload["universe_size"] = len(UNIVERSE)
         return payload

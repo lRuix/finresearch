@@ -20,3 +20,27 @@ def test_to_rmb_closes_cny_identity():
 
 def test_live_fx_rate_entrypoint_available():
     assert callable(get_live_fx_rates)
+
+
+def test_provider_reference_fx_rate_static_fallback():
+    from unittest.mock import patch
+
+    from infrastructure.datasources.provider_datasource import ProviderDataSource
+    from application.services.symbol_resolver import SymbolResolver
+
+    with patch("infrastructure.datasources.provider_datasource.get_live_fx_rates",
+               return_value=None):
+        provider = ProviderDataSource()
+        assert provider.reference_fx_rate("CNY") == 1.0
+        assert provider.reference_fx_rate("USD") == 7.18
+        assert provider.reference_fx_rate("KRW") == 0.0053
+        assert provider.reference_fx_rate("XYZ") == 1.0
+
+    resolver = SymbolResolver(datasource=None)
+    assert resolver.currency_for("a-share") == "CNY"
+    assert resolver.currency_for("fund") == "CNY"
+    assert resolver.currency_for("us") == "USD"
+    assert resolver.currency_for("kr") == "KRW"
+    assert resolver.currency_for("hk") == "HKD"
+    assert resolver.currency_for("fx") == "MULTI"
+    assert resolver.currency_for("crypto") == "USDT"

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 from application.services.screening_service import ScreeningService
 from application.services.screening_helpers import build_reasons
 from domain.models import Instrument, KlineRow
-from domain.universe_data import universe_for
+from domain.universe_data import MARKETS, universe_for
 
 
 def _rows(growth: float = 1.0, count: int = 60):
@@ -95,6 +95,22 @@ def test_screen_uses_dynamic_candidates():
     result = service.screen(market="us", candidates_per_market=5)
     assert result["total_universe"] == 1
     datasource.list_instruments.assert_called_once_with("us", 5)
+
+
+def test_screen_uses_dynamic_candidates_across_markets():
+    datasource = MagicMock()
+    datasource.list_instruments.side_effect = lambda market, top_n: [
+        Instrument(
+            market=market, symbol=f"{market}:1", name="T", currency="USD",
+            sector="s", base_risk=0.3, liquidity=0.9,
+        )
+    ]
+    repo = MagicMock()
+    repo.get_klines.return_value = _rows()
+    service = _service(repo=repo, datasource=datasource)
+    result = service.screen(market="all", candidates_per_market=2)
+    assert result["total_universe"] == len(MARKETS)
+    assert datasource.list_instruments.call_count == len(MARKETS)
 
 
 def test_screen_uses_builtin_universe():

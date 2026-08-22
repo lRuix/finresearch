@@ -96,3 +96,14 @@ def test_resolve_meta_none_when_no_rows():
 
     resolver = SymbolResolver(datasource=FakeDatasource())
     assert resolver.resolve_meta("us", "ZZZZ") is None
+
+
+def test_derive_risk_uses_volatility_and_market_target():
+    stable = [100.0 + i * 0.05 for i in range(60)]
+    assert SymbolResolver._derive_risk(stable, "us") < 0.6
+
+
+def test_derive_liquidity_uses_market_thresholds():
+    crypto_rows = [KlineRow(f"2026-08-{i:02d}", 1, 2, 0.5, 100.0, 5_000_000) for i in range(20)]
+    assert SymbolResolver._derive_liquidity(crypto_rows, "crypto") == 0.85
+    assert SymbolResolver._derive_liquidity(crypto_rows, "fx") == 0.7

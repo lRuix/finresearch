@@ -10,7 +10,6 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 

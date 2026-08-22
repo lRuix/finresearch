@@ -103,3 +103,18 @@ def test_recommendation_empty_results_saves_empty_payload():
     result = service.recommend()
     assert result == {"items": [], "count": 0, "total_universe": 0}
     assert repo.save_evaluation.called
+
+
+def test_recommendation_builtin_universe_flow():
+    repo = MagicMock()
+    repo.get_evaluation.return_value = None
+    screening = MagicMock()
+    screening.screen.return_value = {
+        "items": _results(), "count": 10, "total_universe": 10,
+    }
+    service = RecommendationService(repo, screening)
+    result = service.recommend(limit=10, candidates_per_market=0)
+    assert result["total_universe"] == 10
+    screening.screen.assert_called_once_with(
+        market="all", candidates_per_market=0, limit=None,
+    )

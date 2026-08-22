@@ -25,3 +25,6 @@ class MacroNewsProvider:
     def news_items(self, market: str) -> list[dict]:
         wanted = _MARKET_TAGS.get(market, {"全球"})
         return [item for item in macro.NEWS_ITEMS if set(item["tags"]) & wanted]
+
+    def macro_payload(self, live_news: bool = False) -> dict:
+        return macro.macro_payload(live_news=live_news)
