@@ -16,3 +16,4 @@ def test_news_items_filtered_by_market():
     assert all(set(item["tags"]) & wanted for item in items)
     unrelated = {"A股", "韩股", "南向资金", "数字货币"}
     assert all(not (set(item["tags"]) & unrelated) for item in items)
+    assert any("全球" in set(item["tags"]) for item in items)
