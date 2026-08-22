@@ -19,12 +19,12 @@ def health() -> dict:
 
 @router.get("/api/markets")
 def markets() -> dict:
-    return container.markets()
+    return container.catalog_service.markets()
 
 
 @router.get("/api/universe")
 def universe(market: str = Query("all")) -> dict:
-    return container.universe(market)
+    return container.catalog_service.universe(market)
 
 
 @router.get("/api/kline")
