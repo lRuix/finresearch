@@ -20,6 +20,11 @@ _cache_lock = threading.Lock()
 _dead_providers: dict[str, float] = {}
 _dead_lock = threading.Lock()
 
+_CANDIDATE_CACHE_TTL = 3600
+_CANDIDATE_FALLBACK_TTL = 60
+_candidate_cache: dict[str, tuple[float, list[dict]]] = {}
+_candidate_lock = threading.Lock()
+
 BASE_PRICE = {
     "600519": 1420.0,
     "000001": 11.2,
@@ -94,6 +99,22 @@ def _is_dead(key: str) -> bool:
     with _dead_lock:
         expires_at = _dead_providers.get(key)
     return expires_at is not None and time.time() < expires_at
+
+
+def _candidate_cache_get(key: str) -> list[dict] | None:
+    with _candidate_lock:
+        hit = _candidate_cache.get(key)
+    if hit is None:
+        return None
+    expires_at, payload = hit
+    if time.time() > expires_at:
+        return None
+    return payload
+
+
+def _candidate_cache_set(key: str, payload: list[dict], ttl: int = _CANDIDATE_CACHE_TTL) -> None:
+    with _candidate_lock:
+        _candidate_cache[key] = (time.time() + ttl, payload)
 
 
 def _get_json(
@@ -487,6 +508,222 @@ def akshare_klines(market: str, symbol: str) -> list[dict]:
         return rows
 
     raise ValueError(f"akshare does not support market {market}")
+
+
+# ---------------------------------------------------------------------------
+# Full-market candidate discovery
+# ---------------------------------------------------------------------------
+
+_FX_CANDIDATES = [
+    ("USDCNY=X", "美元/人民币"),
+    ("USDHKD=X", "美元/港币"),
+    ("USDKRW=X", "美元/韩元"),
+    ("USDJPY=X", "美元/日元"),
+    ("USDSGD=X", "美元/新加坡元"),
+    ("USDINR=X", "美元/印度卢比"),
+    ("USDTHB=X", "美元/泰铢"),
+    ("USDMXN=X", "美元/墨西哥比索"),
+    ("USDZAR=X", "美元/南非兰特"),
+    ("USDBRL=X", "美元/巴西雷亚尔"),
+    ("USDCAD=X", "美元/加元"),
+    ("USDCHF=X", "美元/瑞郎"),
+    ("USDNOK=X", "美元/挪威克朗"),
+    ("USDSEK=X", "美元/瑞典克朗"),
+    ("USDDKK=X", "美元/丹麦克朗"),
+    ("USDPLN=X", "美元/波兰兹罗提"),
+    ("USDTRY=X", "美元/土耳其里拉"),
+    ("EURUSD=X", "欧元/美元"),
+    ("GBPUSD=X", "英镑/美元"),
+    ("AUDUSD=X", "澳元/美元"),
+    ("NZDUSD=X", "纽元/美元"),
+]
+
+_CRYPTO_STABLECOINS = {
+    "USDT", "USDC", "BUSD", "TUSD", "DAI", "FDUSD", "EURT", "PYUSD",
+}
+
+_MARKET_BASE_RISK = {
+    "a-share": 0.62,
+    "fund": 0.68,
+    "us": 0.62,
+    "kr": 0.68,
+    "hk": 0.68,
+    "fx": 0.35,
+    "crypto": 0.86,
+}
+
+
+def _top_frame_candidates(
+    df,
+    market: str,
+    symbol_col: str,
+    name_col: str,
+    amount_col: str,
+    top_n: int,
+    symbol_fn,
+    currency: str,
+    sector: str,
+) -> list[dict]:
+    """从东财风格的全市场行情 DataFrame 中按成交额取前 N 只。"""
+    import pandas as pd
+
+    if symbol_col not in df.columns or name_col not in df.columns or amount_col not in df.columns:
+        raise ValueError(f"{market} snapshot missing columns")
+    frame = df.copy()
+    frame[amount_col] = pd.to_numeric(frame[amount_col], errors="coerce").fillna(0)
+    frame = frame.sort_values(amount_col, ascending=False).head(top_n)
+    rows = []
+    for _, row in frame.iterrows():
+        code = str(row[symbol_col]).strip()
+        if not code.isdigit():
+            continue
+        rows.append(
+            {
+                "symbol": symbol_fn(code),
+                "name": str(row[name_col]),
+                "market": market,
+                "currency": currency,
+                "sector": sector,
+                "base_risk": _MARKET_BASE_RISK.get(market, 0.65),
+                "liquidity": 0.85,
+            }
+        )
+    return rows
+
+
+def _a_share_candidates(top_n: int) -> list[dict]:
+    import akshare as ak
+
+    return _top_frame_candidates(
+        ak.stock_zh_a_spot_em(),
+        "a-share",
+        "代码",
+        "名称",
+        "成交额",
+        top_n,
+        lambda code: code.zfill(6),
+        "CNY",
+        "未分类",
+    )
+
+
+def _hk_candidates(top_n: int) -> list[dict]:
+    import akshare as ak
+
+    return _top_frame_candidates(
+        ak.stock_hk_spot_em(),
+        "hk",
+        "代码",
+        "名称",
+        "成交额",
+        top_n,
+        lambda code: f"{code.zfill(5)}.HK",
+        "HKD",
+        "未分类",
+    )
+
+
+def _fund_candidates(top_n: int) -> list[dict]:
+    import akshare as ak
+
+    return _top_frame_candidates(
+        ak.fund_etf_spot_em(),
+        "fund",
+        "代码",
+        "名称",
+        "成交额",
+        top_n,
+        lambda code: code.zfill(6),
+        "CNY",
+        "场内基金",
+    )
+
+
+def _crypto_candidates(top_n: int) -> list[dict]:
+    payload = _get_json("https://api.gateio.ws/api/v4/spot/tickers", timeout=8)
+    pairs: list[tuple[float, str]] = []
+    for item in payload:
+        pair = str(item.get("currency_pair", ""))
+        if not pair.endswith("_USDT"):
+            continue
+        base = pair.split("_")[0]
+        if base in _CRYPTO_STABLECOINS:
+            continue
+        try:
+            volume = float(item.get("quote_volume", 0) or 0)
+        except (TypeError, ValueError):
+            volume = 0.0
+        pairs.append((volume, base))
+    pairs.sort(reverse=True)
+    return [
+        {
+            "symbol": f"{base}USDT",
+            "name": base,
+            "market": "crypto",
+            "currency": "USDT",
+            "sector": "数字资产",
+            "base_risk": _MARKET_BASE_RISK["crypto"],
+            "liquidity": 0.9,
+        }
+        for _, base in pairs[:top_n]
+    ]
+
+
+def _fx_candidates(top_n: int) -> list[dict]:
+    return [
+        {
+            "symbol": symbol,
+            "name": name,
+            "market": "fx",
+            "currency": "MULTI",
+            "sector": "主要货币对",
+            "base_risk": _MARKET_BASE_RISK["fx"],
+            "liquidity": 1.0,
+        }
+        for symbol, name in _FX_CANDIDATES[:top_n]
+    ]
+
+
+def _fallback_candidates(market: str, top_n: int) -> list[dict]:
+    """无全市场列表能力或数据源失败时，回退到内置代表性标的。"""
+    from core.universe import universe_for
+
+    return universe_for(market)[:top_n]
+
+
+def list_candidates(market: str, top_n: int = 20) -> list[dict]:
+    """返回某市场全市场候选，默认按成交额/流动性取前 top_n 只。
+
+    支持 A 股、港股、场内基金、加密与外汇；美股/韩股暂无公开全量
+    免费列表，回退到内置池。列表结果缓存 1 小时，兜底结果缓存 60 秒。
+    """
+    key = f"{market}:{top_n}"
+    cached = _candidate_cache_get(key)
+    if cached is not None:
+        return cached
+
+    fallback = False
+    try:
+        if market == "a-share":
+            rows = _a_share_candidates(top_n)
+        elif market == "hk":
+            rows = _hk_candidates(top_n)
+        elif market == "fund":
+            rows = _fund_candidates(top_n)
+        elif market == "crypto":
+            rows = _crypto_candidates(top_n)
+        elif market == "fx":
+            rows = _fx_candidates(top_n)
+        else:
+            rows = _fallback_candidates(market, top_n)
+            fallback = True
+    except Exception:
+        rows = _fallback_candidates(market, top_n)
+        fallback = True
+
+    ttl = _CANDIDATE_FALLBACK_TTL if fallback else _CANDIDATE_CACHE_TTL
+    _candidate_cache_set(key, rows, ttl)
+    return rows
 
 
 def mock_klines(symbol: str, market: str, interval: str, limit: int) -> list[dict]:

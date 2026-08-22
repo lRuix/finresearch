@@ -1,7 +1,10 @@
 """API 端点测试。"""
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 
 from app import app
+from core import screener
 
 client = TestClient(app)
 
@@ -36,3 +39,24 @@ def test_recommend_uses_algorithm_layer():
     assert "total_score" in body
     assert 0 <= body["total_score"] <= 100
     assert set(body["factor_scores"].keys()) == {"trend", "momentum", "volatility", "risk", "macro"}
+
+
+def test_recommendations_forwards_candidates_per_market():
+    payload = {"items": [], "count": 0, "total_universe": 140}
+    with patch.object(screener, "recommend", return_value=payload) as mock_recommend:
+        resp = client.get(
+            "/api/recommendations",
+            params={"limit": 8, "candidates_per_market": 30},
+        )
+    assert resp.status_code == 200
+    assert mock_recommend.call_args.kwargs == {"limit": 8, "candidates_per_market": 30}
+
+
+def test_analyze_accepts_arbitrary_symbol():
+    resp = client.get("/api/analyze", params={"market": "us", "symbol": "GOOG"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "error" not in body
+    assert body["meta"]["symbol"] == "GOOG"
+    assert body["meta"]["auto"] is True
+    assert "total_score" in body["analysis"]

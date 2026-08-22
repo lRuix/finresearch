@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core import macro
 from core.indicators import analyze
-from core.providers import get_kline
-from core.universe import universe_for
+from core.providers import get_kline, list_candidates
+from core.universe import MARKETS, universe_for
 
 
 def _asset_type(item: dict) -> str:
@@ -184,8 +184,19 @@ def _compute_results(
     min_momentum: float = 0,
     min_rsi: float = 0,
     max_rsi: float = 100,
+    candidates_per_market: int = 0,
 ) -> tuple[list[dict], int]:
-    items = universe_for(market)
+    if candidates_per_market > 0:
+        if market == "all":
+            items = [
+                candidate
+                for market_info in MARKETS
+                for candidate in list_candidates(market_info["id"], candidates_per_market)
+            ]
+        else:
+            items = list_candidates(market, candidates_per_market)
+    else:
+        items = universe_for(market)
 
     def build_candidate(item: dict) -> dict | None:
         klines = get_kline(item["market"], item["symbol"], "d", 180, prefer_real=True)
@@ -267,8 +278,11 @@ def screen(
     return {"items": results[:limit], "count": len(results), "total_universe": total_universe}
 
 
-def recommend(limit: int = 10) -> dict:
-    results, total_universe = _compute_results(market="all")
+def _build_recommend(limit: int = 10, candidates_per_market: int = 0) -> dict:
+    results, total_universe = _compute_results(
+        market="all",
+        candidates_per_market=candidates_per_market,
+    )
     quotas = {
         "a-share": 2,
         "us": 2,
@@ -318,6 +332,18 @@ def recommend(limit: int = 10) -> dict:
 
     picked.sort(key=lambda item: item["total_score"], reverse=True)
     return {"items": picked[:limit], "count": len(picked[:limit]), "total_universe": total_universe}
+
+
+def recommend(limit: int = 10, candidates_per_market: int = 0) -> dict:
+    """首页推荐。candidates_per_market > 0 时从全市场候选池取数，
+    否则使用内置标的池；结果按自然日缓存，避免每次刷新全量重算。"""
+    from core.search import daily_cache_get, daily_cache_set
+
+    cache_key = f"recommend:{limit}:{candidates_per_market}"
+    cached = daily_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    return daily_cache_set(cache_key, _build_recommend(limit, candidates_per_market))
 
 
 def _market_name(market_id: str) -> str:

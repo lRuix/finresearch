@@ -13,7 +13,7 @@ from core.algorithms.context import AnalysisContext
 from core.indicators import analyze
 from core.providers import get_kline, get_kline_with_source
 from core.search import search as search_instruments
-from core.universe import MARKETS, UNIVERSE, find_symbol, universe_for
+from core.universe import MARKETS, UNIVERSE, universe_for
 from core.valuation import currency as currency_util
 
 
@@ -87,7 +87,7 @@ def kline(
 
 @app.get("/api/analyze")
 def analysis(market: str, symbol: str) -> dict:
-    meta = find_symbol(market, symbol)
+    meta = search.resolve_meta(market, symbol)
     if meta is None:
         return {"error": "symbol not found"}
     rows = get_kline(market, symbol, "d", 180, prefer_real=True)
@@ -130,8 +130,14 @@ def run_screen(
 
 
 @app.get("/api/recommendations")
-def recommendations(limit: int = Query(10, ge=1, le=20)) -> dict:
-    result = screener.recommend(limit=limit)
+def recommendations(
+    limit: int = Query(10, ge=1, le=20),
+    candidates_per_market: int = Query(20, ge=0, le=100),
+) -> dict:
+    result = screener.recommend(
+        limit=limit,
+        candidates_per_market=candidates_per_market,
+    )
     result["updated_at"] = datetime.now(timezone.utc).isoformat()
     return result
 

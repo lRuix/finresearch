@@ -1,8 +1,18 @@
 """实时汇率查询测试。"""
 from unittest.mock import patch
 
+import pytest
+
 from core import providers
 from core.valuation import currency
+
+
+@pytest.fixture(autouse=True)
+def _clear_provider_circuit_breaker():
+    """其他测试可能触发真实请求失败并留下熔断状态，逐例清理保证隔离。"""
+    providers._dead_providers.clear()
+    yield
+    providers._dead_providers.clear()
 
 
 def test_get_live_fx_rates_converts_to_rmb():

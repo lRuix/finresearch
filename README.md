@@ -6,10 +6,11 @@
 
 - 全球市场切换：A 股、基金、美股、韩股、港股、外汇、数字货币。
 - 标的池：内置各市场代表性标的，代码集中在 `backend/core/universe.py`。
+- 任意代码搜索：跨市场识别 A 股、基金、美股、韩股、港股、外汇与数字货币代码，搜索后可直接打开 K 线与指标分析。
 - K 线图：日/周/小时周期，包含 MA、成交量、缩放与十字光标。
 - 指标分析：均线、MACD、RSI、布林带、ATR、波动率、动量。
 - 智能筛选：综合趋势、动能、波动、风险与宏观因子，输出 0-100 评分。
-- 今日推荐：首页跨市场推荐 10 支具体标的，覆盖股票、基金、外汇对和数字货币对。
+- 今日推荐：首页跨市场推荐 10 支具体标的；候选池默认从全市场动态拉取（各市场按成交额/流动性取前 20 只），数据源失败时回退内置池。
 - 推荐解释：点击标的展开加权推荐原因，涵盖技术指标、宏观分析、地缘政治、资金流向、政策与行业事件。
 - 宏观面板：美元指数、美债收益率、原油、VIX 等快照，以及国际局势新闻热词。
 
@@ -22,7 +23,7 @@ backend/   FastAPI + yfinance + 可选 akshare/ccxt
 
 ### 模块一（工程层）/ 模块二（算法层）划分
 
-- **模块一（工程层）**：`backend/core/` 根目录 —— 数据获取（`providers.py`，真实源 + 确定性模拟兜底）、代码识别与跨市场搜索（`search.py`）、技术指标（`indicators.py`）、筛选与推荐（`screener.py`）、宏观（`macro.py`）、统一 RMB 计价与购汇额度约束（`valuation/`）、跨资产比较编排（`comparison.py`）。
+- **模块一（工程层）**：`backend/core/` 根目录 —— 数据获取（`providers.py`，真实源 + 全市场候选发现 + 确定性模拟兜底）、代码识别与跨市场搜索（`search.py`）、技术指标（`indicators.py`）、筛选与推荐（`screener.py`）、宏观（`macro.py`）、统一 RMB 计价与购汇额度约束（`valuation/`）、跨资产比较编排（`comparison.py`）。
 - **模块二（算法层）**：`backend/core/algorithms/` —— 算法只消费 `AnalysisContext` 数据契约（`algorithms/context.py`），**不 import providers、不发起网络请求**：
   - 因子：`algorithms/factors/`，五个可插拔因子（trend/momentum/volatility/risk/macro）+ `FACTOR_REGISTRY` 注册表；
   - 情绪分析：`algorithms/sentiment/`，`NewsRuleAnalyzer` + `SENTIMENT_REGISTRY`；
@@ -74,8 +75,8 @@ pnpm dev
 - `GET /api/markets` 市场列表。
 - `GET /api/universe?market=all` 标的池。
 - `GET /api/kline?market=us&symbol=AAPL&period=d&limit=180` K 线数据。
-- `GET /api/analyze?market=us&symbol=AAPL` 单标的指标与评分。
-- `GET /api/recommendations?limit=10` 首页加权推荐列表。
+- `GET /api/analyze?market=us&symbol=AAPL` 任意代码的单标的指标与评分。
+- `GET /api/recommendations?limit=10&candidates_per_market=20` 首页加权推荐列表；`candidates_per_market=0` 时回退内置标的池。
 - `GET /api/screen?market=all&min_score=60&limit=60` 全球筛选。
 - `GET /api/macro` 宏观快照与局势热词。
 - `GET /api/search?q=688836` 任意代码跨市场搜索。
@@ -87,6 +88,12 @@ pnpm dev
 - RMB 折算采用**复合公式**：`收益(RMB) = (1 + 收益本币) × (1 + 汇率变动率) - 1`（简单乘法只是近似，本项目按金融口径采用复合公式，见 `core/valuation/currency.py`）。
 - 程序按**自然日**刷新数据；评估结果按**天级缓存**（`core/search.py` 的 `daily_cache_get/set`），同一键同一天只评估一次。
 - 购汇约束：美股/港股/韩股/外汇/数字货币需占用个人年度等值 5 万美元购汇额度（`core/valuation/constraints.py`，`requires_quota`/`quota_note`）。
+
+## 全市场推荐说明
+
+- 推荐候选池按自然日缓存，同一天重复请求不会全量重算。
+- A 股、港股、场内 ETF、加密与外汇会动态拉取全市场快照并按成交额/流动性取前 N 只。
+- 美股与韩股目前没有可免费获取的公开全量列表，仍使用内置代表性标的；场外基金暂未纳入动态候选池。
 
 ## 后续路线
 
