@@ -162,6 +162,8 @@ def analyze(klines: list[dict], meta: dict | None = None) -> dict:
         volatility_score = 34.0
 
     risk = meta.get("base_risk", 0.65)
+    if risk is None:
+        risk = 0.65
     risk_score = round((1 - risk) * 100, 1)
 
     macro_score = float(meta.get("macro_score", 55))
@@ -218,4 +220,3 @@ def analyze(klines: list[dict], meta: dict | None = None) -> dict:
         "total_score": total,
         "signals": signals,
     }
-

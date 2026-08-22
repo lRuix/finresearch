@@ -144,3 +144,14 @@ def test_screen_missing_base_risk_uses_default():
     result = service.screen(market="us", max_risk=50)
     assert result["total_universe"] == 1
     assert result["items"][0]["symbol"] == "MISSING"
+
+
+def test_screen_tolerates_none_base_risk():
+    repo = MagicMock()
+    repo.get_klines.return_value = _rows()
+    candidate = _candidate("NONE")
+    candidate["base_risk"] = None
+    service = _service(repo=repo, candidates=[candidate])
+    result = service.screen(market="us")
+    assert result["total_universe"] == 1
+    assert result["items"][0]["symbol"] == "NONE"

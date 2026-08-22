@@ -16,3 +16,14 @@ def test_rsi_basic():
 def test_analyze_requires_two_rows():
     result = analyze([{"close": 1.0}])
     assert result["error"] == "insufficient kline data"
+
+
+def test_analyze_tolerates_none_base_risk():
+    rows = [
+        {"time": f"2026-08-{i:02d}", "open": 1.0, "high": 2.0,
+         "low": 0.5, "close": 100.0 + i, "volume": 1000}
+        for i in range(1, 61)
+    ]
+    result = analyze(rows, {"market": "us", "base_risk": None})
+    assert "error" not in result
+    assert result["risk_score"] == 35.0

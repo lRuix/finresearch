@@ -57,13 +57,14 @@ class ScreeningService:
         ]
         enriched = dict(item)
         enriched["macro_score"] = self._macro.macro_score(item["market"])
+        base_risk = item.get("base_risk", 0.65)
+        if base_risk is None:
+            base_risk = 0.65
+        enriched["base_risk"] = base_risk
         analysis = analyze(kline_dicts, enriched)
         if "error" in analysis:
             return None
         rsi = analysis["rsi14"] or 50
-        base_risk = item.get("base_risk", 0.65)
-        if base_risk is None:
-            base_risk = 0.65
         risk = (1 - base_risk) * 100
         if (analysis["total_score"] < min_score or risk > max_risk
                 or analysis["trend_score"] < min_trend
