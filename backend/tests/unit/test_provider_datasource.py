@@ -12,7 +12,7 @@ def test_get_klines_converts_rows_and_source():
         {"time": "2026-08-23", "open": 1.5, "high": 2.5, "low": 1.2,
          "close": 2.2, "volume": 120},
     ]
-    with patch("infrastructure.datasources.provider_datasource.providers.get_kline_with_source",
+    with patch("infrastructure.datasources.provider_datasource.get_kline_with_source",
                return_value=(fake_rows, "live")):
         rows = ProviderDataSource().get_klines("us", "AAPL", "d", limit=30)
     assert rows == [
@@ -28,7 +28,7 @@ def test_get_klines_with_source_filters_exclusive_start():
         {"time": "2026-08-23", "open": 1.5, "high": 2.5, "low": 1.2,
          "close": 2.2, "volume": 120},
     ]
-    with patch("infrastructure.datasources.provider_datasource.providers.get_kline_with_source",
+    with patch("infrastructure.datasources.provider_datasource.get_kline_with_source",
                return_value=(fake_rows, "live")):
         rows, source = ProviderDataSource().get_klines_with_source(
             "us", "AAPL", "d", start="2026-08-22",
@@ -38,7 +38,7 @@ def test_get_klines_with_source_filters_exclusive_start():
 
 
 def test_reference_fx_rate_falls_back_to_static():
-    with patch("infrastructure.datasources.provider_datasource.providers.get_live_fx_rates",
+    with patch("infrastructure.datasources.provider_datasource.get_live_fx_rates",
                return_value=None):
         rate = ProviderDataSource().reference_fx_rate("USD")
     assert rate == 7.18
@@ -52,7 +52,7 @@ def test_get_klines_with_source_forwards_prefer_real():
         return [], "mock"
 
     with patch(
-        "infrastructure.datasources.provider_datasource.providers.get_kline_with_source",
+        "infrastructure.datasources.provider_datasource.get_kline_with_source",
         side_effect=fake,
     ):
         ProviderDataSource().get_klines_with_source(

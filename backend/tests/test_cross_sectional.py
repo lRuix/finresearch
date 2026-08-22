@@ -1,6 +1,6 @@
 """跨标的同市场截面评分测试。"""
-from core.algorithms.config import build_engine
-from core.algorithms.context import AnalysisContext
+from domain.algorithms.config import build_engine
+from domain.algorithms.context import AnalysisContext
 
 
 def _ctx(symbol, closes):

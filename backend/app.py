@@ -55,7 +55,7 @@ def build_container(config: AppConfig | None = None,
     analysis = AnalysisService(
         repository, sync_service, symbol_resolver, macro_news, datasource,
     )
-    search_service = SearchService()
+    search_service = SearchService(datasource)
     macro_service = MacroService()
     return ServiceContainer(
         config=config, repository=repository, datasource=datasource,

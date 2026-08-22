@@ -1,7 +1,7 @@
 """推荐引擎合成测试。"""
-from core.algorithms.config import build_engine
-from core.algorithms.context import AnalysisContext
-from core.algorithms.engines.weighted import WeightedEngine
+from domain.algorithms.config import build_engine
+from domain.algorithms.context import AnalysisContext
+from domain.algorithms.engines.weighted import WeightedEngine
 
 
 def test_build_engine_returns_weighted():

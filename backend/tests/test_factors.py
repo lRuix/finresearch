@@ -1,7 +1,7 @@
 """因子打分测试。"""
 import pytest
-from core.algorithms.context import AnalysisContext
-from core.algorithms.factors import (
+from domain.algorithms.context import AnalysisContext
+from domain.algorithms.factors import (
     TrendFactor,
     MomentumFactor,
     VolatilityFactor,

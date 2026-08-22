@@ -1,9 +1,13 @@
-"""Adapter wrapping the existing core.providers network layer."""
+"""ProviderDataSource adapter backed by the infrastructure provider layer."""
 from __future__ import annotations
 
-from core import providers
 from domain.models import Instrument, KlineRow
 from domain.valuation.currency import STATIC_FX_RATES
+from infrastructure.datasources.provider_impl import (
+    get_kline_with_source,
+    get_live_fx_rates,
+    list_candidates,
+)
 
 
 def _to_kline_rows(rows: list[dict]) -> list[KlineRow]:
@@ -22,7 +26,7 @@ def _to_kline_rows(rows: list[dict]) -> list[KlineRow]:
 
 class ProviderDataSource:
     def list_instruments(self, market: str, top_n: int) -> list[Instrument]:
-        items = providers.list_candidates(market, top_n)
+        items = list_candidates(market, top_n)
         return [
             Instrument(
                 market=item.get("market", market),
@@ -48,7 +52,7 @@ class ProviderDataSource:
                                start: str | None = None, end: str | None = None,
                                limit: int = 180,
                                prefer_real: bool = True) -> tuple[list[KlineRow], str]:
-        rows, source = providers.get_kline_with_source(
+        rows, source = get_kline_with_source(
             market, symbol, period, limit, prefer_real=prefer_real,
         )
         if start:
@@ -58,11 +62,11 @@ class ProviderDataSource:
         return _to_kline_rows(rows), source
 
     def get_live_fx_rates(self) -> dict[str, float] | None:
-        return providers.get_live_fx_rates()
+        return get_live_fx_rates()
 
     def reference_fx_rate(self, currency: str) -> float:
         try:
-            live = providers.get_live_fx_rates()
+            live = get_live_fx_rates()
             if live and currency in live:
                 return live[currency]
         except Exception:

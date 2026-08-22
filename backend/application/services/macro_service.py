@@ -1,7 +1,7 @@
 """Macro service: snapshot, news and market bias payload."""
 from __future__ import annotations
 
-from core import macro
+from infrastructure.datasources import macro_data as macro
 from domain.universe_data import UNIVERSE
 
 

@@ -1,5 +1,5 @@
 """风险调整后收益指标测试。"""
-from core.valuation.metrics import (
+from domain.valuation.metrics import (
     annualized_return, calmar_ratio, max_drawdown, sharpe_ratio,
 )
 

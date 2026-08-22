@@ -1,6 +1,6 @@
 """情绪分析测试。"""
-from core.algorithms.context import AnalysisContext
-from core.algorithms.sentiment import NewsRuleAnalyzer
+from domain.algorithms.context import AnalysisContext
+from domain.algorithms.sentiment import NewsRuleAnalyzer
 
 
 def test_multiplier_neutral_when_zero():

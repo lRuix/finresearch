@@ -686,7 +686,7 @@ def _fx_candidates(top_n: int) -> list[dict]:
 
 def _fallback_candidates(market: str, top_n: int) -> list[dict]:
     """无全市场列表能力或数据源失败时，回退到内置代表性标的。"""
-    from core.universe import universe_for
+    from domain.universe_data import universe_for
 
     return universe_for(market)[:top_n]
 

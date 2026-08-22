@@ -1,7 +1,7 @@
-"""Macro/news adapter wrapping core.macro static data."""
+"""Macro/news adapter wrapping infrastructure macro data."""
 from __future__ import annotations
 
-from core import macro
+from infrastructure.datasources import macro_data as macro
 
 
 _MARKET_TAGS = {

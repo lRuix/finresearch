@@ -1,11 +1,11 @@
 """计价与约束层测试。"""
-from core.valuation.constraints import QUOTA_USD_YEARLY, quota_note, requires_quota
-from core.valuation.currency import market_fx_rate, to_rmb_returns
+from domain.valuation.constraints import QUOTA_USD_YEARLY, quota_note, requires_quota
+from domain.valuation.currency import static_reference_fx_rate, to_rmb_returns
 
 
-def test_cny_no_conversion():
-    assert market_fx_rate("a-share", "CNY") == 1.0
-    assert market_fx_rate("fund", "CNY") == 1.0
+def test_static_fx_rates():
+    assert static_reference_fx_rate("CNY") == 1.0
+    assert static_reference_fx_rate("USD") == 7.18
 
 
 def test_to_rmb_returns_applies_fx_change():

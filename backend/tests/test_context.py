@@ -1,5 +1,5 @@
 """AnalysisContext 数据契约测试。"""
-from core.algorithms.context import AnalysisContext
+from domain.algorithms.context import AnalysisContext
 
 
 def test_context_holds_all_fields():
