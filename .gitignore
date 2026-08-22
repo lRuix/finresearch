@@ -15,3 +15,5 @@ design/
 .agent-teams/
 .superpowers/
 .worktrees/
+
+backend/data/

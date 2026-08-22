@@ -1,24 +1,61 @@
 """Service container wiring smoke test."""
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from application.config import AppConfig
+from application.services.analysis_service import AnalysisService
+from application.services.catalog_service import CatalogService
+from application.services.comparison_service import ComparisonService
+from application.services.macro_service import MacroService
+from application.services.recommendation_service import RecommendationService
+from application.services.screening_service import ScreeningService
+from application.services.search_service import SearchService
+from application.services.symbol_resolver import SymbolResolver
+from application.services.sync_service import SyncService
 from app import build_container
+from domain.models import KlineRow
+from infrastructure.datasources.macro_provider import MacroNewsProvider
+from infrastructure.repository.sqlite import SqliteMarketDataRepository
 
 
-def test_container_wires_all_services():
+def test_container_wires_all_services(tmp_path):
     datasource = MagicMock()
+    rows = [
+        KlineRow(
+            time=f"2026-08-{i:02d}", open=1.0, high=2.0,
+            low=0.5, close=100.0 + i, volume=1000,
+        )
+        for i in range(1, 61)
+    ]
+    datasource.get_klines.return_value = rows
+    datasource.get_klines_with_source.return_value = (rows, "live")
+    datasource.reference_fx_rate.return_value = 7.18
+    datasource.get_live_fx_rates.return_value = None
+
     container = build_container(
-        AppConfig(db_path=Path(tempfile.mkdtemp()) / "test.db"),
+        AppConfig(db_path=tmp_path / "test.db"),
         datasource=datasource,
     )
-    assert container.analysis_service is not None
-    assert container.screening_service is not None
-    assert container.recommendation_service is not None
-    assert container.comparison_service is not None
-    assert container.sync_service is not None
-    assert container.catalog_service is not None
-    assert container.search_service is not None
-    assert container.macro_service is not None
-    assert container.macro_service.macro_payload(False)["universe_size"] > 0
+
+    assert isinstance(container.repository, SqliteMarketDataRepository)
+    assert container.datasource is datasource
+    assert isinstance(container.macro_news, MacroNewsProvider)
+    assert isinstance(container.symbol_resolver, SymbolResolver)
+    assert isinstance(container.catalog_service, CatalogService)
+    assert isinstance(container.search_service, SearchService)
+    assert isinstance(container.macro_service, MacroService)
+    assert isinstance(container.sync_service, SyncService)
+    assert isinstance(container.screening_service, ScreeningService)
+    assert isinstance(container.recommendation_service, RecommendationService)
+    assert isinstance(container.comparison_service, ComparisonService)
+    assert isinstance(container.analysis_service, AnalysisService)
+
+    # 共享同一 sync_service 实例：screening 内部使用容器注入的 sync。
+    assert container.screening_service._sync is container.sync_service
+    assert container.recommendation_service._screening is container.screening_service
+    assert container.comparison_service._sync is container.sync_service
+
+    # 走一条依赖注入链路：kline 从 datasource 拉取并落库后返回。
+    items, source = container.analysis_service.kline("us", "AAPL", "d", 30)
+    assert source == "live"
+    assert len(items) == 30
+    assert container.repository.get_klines("us", "AAPL", "d")
