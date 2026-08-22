@@ -2375,6 +2375,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from application.config import AppConfig
 from application.ports import MarketDataSource
 from application.services.analysis_service import AnalysisService
+from application.services.catalog_service import CatalogService
 from application.services.comparison_service import ComparisonService
 from application.services.recommendation_service import RecommendationService
 from application.services.screening_service import ScreeningService
@@ -2394,6 +2395,7 @@ class ServiceContainer:
     datasource: MarketDataSource
     macro_news: MacroNewsProvider
     symbol_resolver: SymbolResolver
+    catalog_service: CatalogService
     sync_service: SyncService
     screening_service: ScreeningService
     recommendation_service: RecommendationService
@@ -2418,17 +2420,18 @@ def build_container(config: AppConfig | None = None,
     datasource = datasource or ProviderDataSource()
     macro_news = MacroNewsProvider()
     symbol_resolver = SymbolResolver(datasource)
+    catalog = CatalogService()
     sync_service = SyncService(repository, datasource)
-    screening = ScreeningService(
-        repository, sync_service, symbol_resolver, macro_news, datasource,
-    )
+    screening = ScreeningService(repository, sync_service, macro_news, datasource)
     recommendation = RecommendationService(repository, screening)
     comparison = ComparisonService(repository, sync_service, symbol_resolver, datasource)
-    analysis = AnalysisService(repository, sync_service, symbol_resolver, macro_news)
+    analysis = AnalysisService(
+        repository, sync_service, symbol_resolver, macro_news, datasource,
+    )
     return ServiceContainer(
         config=config, repository=repository, datasource=datasource,
         macro_news=macro_news, symbol_resolver=symbol_resolver,
-        sync_service=sync_service, screening_service=screening,
+        catalog_service=catalog, sync_service=sync_service, screening_service=screening,
         recommendation_service=recommendation,
         comparison_service=comparison, analysis_service=analysis,
     )
