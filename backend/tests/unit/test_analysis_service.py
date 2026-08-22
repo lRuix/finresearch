@@ -77,7 +77,8 @@ def test_kline_forwards_prefer_real():
     sync = MagicMock()
     sync.sync.return_value = (_rows(), "mock")
     service = _service(repo=repo, sync=sync)
-    service.kline("us", "AAPL", "d", 30, prefer_real=False)
+    _, source = service.kline("us", "AAPL", "d", 30, prefer_real=False)
+    assert source == "mock"
     assert sync.sync.call_args.kwargs["prefer_real"] is False
 
 
@@ -99,3 +100,16 @@ def test_recommend_uses_market_news_sentiment_and_shape():
         "factor_scores", "factor_details", "sentiment", "total_score", "detail",
     }
     assert 0 <= result["total_score"] <= 100
+    macro.news_items.assert_called_once_with("us")
+    assert result["sentiment"]["polarity"] == 0.3
+
+
+def test_ensure_klines_triggers_sync_when_short():
+    repo = MagicMock()
+    repo.get_klines.side_effect = [_rows(29), _rows(60)]
+    sync = MagicMock()
+    sync.sync.return_value = (_rows(), "live")
+    service = _service(repo=repo, sync=sync)
+    rows = service._ensure_klines("us", "AAPL", "d")
+    assert len(rows) == 60
+    assert sync.sync.called

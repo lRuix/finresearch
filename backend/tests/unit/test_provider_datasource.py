@@ -42,3 +42,20 @@ def test_reference_fx_rate_falls_back_to_static():
                return_value=None):
         rate = ProviderDataSource().reference_fx_rate("USD")
     assert rate == 7.18
+
+
+def test_get_klines_with_source_forwards_prefer_real():
+    captured = {}
+
+    def fake(market, symbol, period, limit, prefer_real=True):
+        captured["prefer_real"] = prefer_real
+        return [], "mock"
+
+    with patch(
+        "infrastructure.datasources.provider_datasource.providers.get_kline_with_source",
+        side_effect=fake,
+    ):
+        ProviderDataSource().get_klines_with_source(
+            "us", "AAPL", "d", limit=30, prefer_real=False,
+        )
+    assert captured["prefer_real"] is False

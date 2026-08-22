@@ -143,3 +143,27 @@ def test_sync_keeps_caller_start_when_later_than_watermark():
 
     SyncService(repo, RecordingDatasource()).sync("us", "AAPL", "d", start="2026-08-25")
     assert captured["start"] == "2026-08-25"
+
+
+def test_sync_forwards_prefer_real_to_datasource():
+    repo = FakeRepository()
+    captured = {}
+
+    class RecordingDatasource:
+        def get_klines_with_source(self, market, symbol, period,
+                                   start=None, end=None, limit=180,
+                                   prefer_real: bool = True):
+            captured["prefer_real"] = prefer_real
+            return [], "mock"
+
+        def get_klines(self, market, symbol, period, start=None, end=None,
+                       limit=180, prefer_real: bool = True):
+            rows, source = self.get_klines_with_source(
+                market, symbol, period, start, end, limit, prefer_real,
+            )
+            return rows
+
+    SyncService(repo, RecordingDatasource()).sync(
+        "us", "AAPL", "d", prefer_real=False,
+    )
+    assert captured["prefer_real"] is False
