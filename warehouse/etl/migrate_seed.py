@@ -66,6 +66,10 @@ def _mapped_sqlite_row(row: sqlite3.Row, batch_id: str) -> dict[str, Any]:
     if market == "fx":
         # ODS FX 表使用 rate 字段；沿用 SQLite 的 OHLCV 数值即可兼容现有 DWD 装载。
         base_currency, quote_currency = _split_fx_currency(row["symbol"])
+        if base_currency is None or quote_currency is None:
+            logger.warning(
+                "Cannot parse FX symbol %s into a currency pair", row["symbol"]
+            )
         mapped.update(
             {
                 "base_currency": base_currency,
@@ -148,7 +152,8 @@ def migrate_klines(
 
 def _parse_news_time(value: str) -> datetime:
     if str(value).strip().upper() == "RSS":
-        return datetime.now(_CN_TIMEZONE)
+        now = datetime.now(_CN_TIMEZONE)
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
     parsed = datetime.strptime(value, "%m-%d %H:%M")
     now = datetime.now(_CN_TIMEZONE)
     parsed = parsed.replace(year=now.year, tzinfo=_CN_TIMEZONE)

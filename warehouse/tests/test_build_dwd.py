@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import uuid
 from typing import Any
 
@@ -744,6 +744,26 @@ def test_dimensions_are_backfilled_without_duplicates(dsn, dwd_cleanup):
     assert provider_count == 1
     assert date_count == 1
     assert instrument_count == 1
+
+
+def test_build_dwd_streams_across_multiple_fetch_batches(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-STREAM")
+    start = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
+    rows = [
+        _a_share_row(
+            dwd_cleanup.provider_id,
+            symbol,
+            dwd_cleanup.batch_id,
+            ts=(start + timedelta(days=index)).isoformat(),
+        )
+        for index in range(1200)
+    ]
+
+    upsert_ods_rows(dsn, "a-share", rows, batch_size=500)
+    affected = build_dwd(dsn, "a-share")
+
+    assert affected == 1200
+    assert len(_fact_row(dsn, "a-share", symbol)) == 1200
 
 
 def test_unknown_market_raises_value_error(dsn, dwd_cleanup):

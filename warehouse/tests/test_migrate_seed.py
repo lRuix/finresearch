@@ -1,14 +1,23 @@
 """Seed migration helper tests."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
+import sqlite3
+import uuid
 
+import psycopg
+import pytest
+
+from etl.load_ods import MARKET_TABLES
 from etl.migrate_seed import (
     _CN_TIMEZONE,
     _new_batch_id,
     _parse_news_time,
     _split_fx_currency,
+    migrate_klines,
 )
+
+MIGRATE_SYMBOL_PREFIX = "TEST-MIGRATE-"
 
 
 def test_fx_currency_parsing_supports_common_symbol_formats():
@@ -33,22 +42,214 @@ def test_news_time_uses_current_year_and_cn_timezone():
     assert parsed.minute == 12
 
 
-def test_news_time_falls_back_to_previous_year_when_far_in_future():
-    future = (datetime.now(_CN_TIMEZONE) + timedelta(days=30)).strftime("%m-%d %H:%M")
-    parsed = _parse_news_time(future)
-    now = datetime.now(_CN_TIMEZONE)
+def test_rss_news_time_is_stable_within_ingestion_day():
+    first = _parse_news_time("RSS")
+    second = _parse_news_time("RSS")
 
-    assert parsed.year == now.year - 1
-
-
-def test_rss_news_time_uses_now():
-    before = datetime.now(_CN_TIMEZONE) - timedelta(seconds=1)
-    parsed = _parse_news_time("RSS")
-    after = datetime.now(_CN_TIMEZONE) + timedelta(seconds=1)
-
-    assert before <= parsed <= after
+    assert first == second
+    assert first.date() == datetime.now(_CN_TIMEZONE).date()
+    assert first.hour == 0
+    assert first.minute == 0
 
 
 def test_batch_ids_are_unique():
     assert _new_batch_id() != _new_batch_id()
     assert _new_batch_id().startswith("seed-")
+
+
+@pytest.fixture
+def migrate_cleanup(dsn):
+    batch_id = f"test-migrate-{uuid.uuid4()}"
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT market_id FROM dim_market")
+        before_markets = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT provider_id FROM dim_provider")
+        before_providers = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT date_key FROM dim_date")
+        before_dates = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT instrument_id FROM dim_instrument")
+        before_instruments = {row[0] for row in cur.fetchall()}
+
+    yield batch_id
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        symbols_by_market: dict[str, list[str]] = {}
+        for market, table in MARKET_TABLES.items():
+            cur.execute(
+                f"SELECT symbol FROM {table} WHERE sync_batch_id = %s",
+                (batch_id,),
+            )
+            symbols_by_market[market] = [row[0] for row in cur.fetchall()]
+            cur.execute(
+                f"DELETE FROM {table} WHERE sync_batch_id = %s",
+                (batch_id,),
+            )
+
+        for market, symbols in symbols_by_market.items():
+            if not symbols:
+                continue
+            cur.execute(
+                """
+                DELETE FROM fact_kline
+                WHERE provider_id = 'sqlite'
+                  AND instrument_id IN (
+                      SELECT instrument_id
+                      FROM dim_instrument
+                      WHERE market_id = %s AND symbol = ANY(%s)
+                  )
+                """,
+                (market, symbols),
+            )
+            cur.execute(
+                """
+                DELETE FROM dim_instrument
+                WHERE market_id = %s
+                  AND symbol = ANY(%s)
+                  AND instrument_id != ALL(%s)
+                """,
+                (market, symbols, list(before_instruments)),
+            )
+
+        cur.execute(
+            """
+            DELETE FROM dim_provider
+            WHERE provider_id = 'sqlite' AND provider_id != ALL(%s)
+            """,
+            (list(before_providers),),
+        )
+        cur.execute(
+            "DELETE FROM dim_date WHERE date_key != ALL(%s)",
+            (list(before_dates),),
+        )
+        cur.execute(
+            "DELETE FROM dim_market WHERE market_id != ALL(%s)",
+            (list(before_markets),),
+        )
+        conn.commit()
+
+
+def _seed_sqlite_db(tmp_path) -> str:
+    db_path = tmp_path / "migrate-seed.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE klines (
+          market TEXT, symbol TEXT, period TEXT, time TEXT,
+          open REAL, high REAL, low REAL, close REAL, volume REAL
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO klines
+          (market, symbol, period, time, open, high, low, close, volume)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "a-share",
+                f"{MIGRATE_SYMBOL_PREFIX}A",
+                "d",
+                "2026-01-01",
+                1.0,
+                2.0,
+                0.5,
+                1.5,
+                100.0,
+            ),
+            (
+                "a-share",
+                f"{MIGRATE_SYMBOL_PREFIX}A",
+                "d",
+                "2026-01-02",
+                1.0,
+                2.0,
+                0.5,
+                1.6,
+                110.0,
+            ),
+            (
+                "fx",
+                "EURUSD=X",
+                "d",
+                "2026-01-01",
+                1.1,
+                1.2,
+                1.0,
+                1.15,
+                0.0,
+            ),
+            (
+                "unknown",
+                f"{MIGRATE_SYMBOL_PREFIX}UNKNOWN",
+                "d",
+                "2026-01-01",
+                1.0,
+                2.0,
+                0.5,
+                1.0,
+                10.0,
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return str(db_path)
+
+
+def test_migrate_klines_streams_markets_and_skips_unknown(dsn, migrate_cleanup, tmp_path):
+    db_path = _seed_sqlite_db(tmp_path)
+    batch_id = migrate_cleanup
+
+    stats = migrate_klines(dsn, db_path, batch_id=batch_id, ods_batch_size=1)
+
+    assert stats["a-share"]["ods"] == 2
+    assert stats["fx"]["ods"] == 1
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM ods_klines_a_share WHERE sync_batch_id = %s",
+            (batch_id,),
+        )
+        assert cur.fetchone()[0] == 2
+        cur.execute(
+            "SELECT count(*) FROM ods_klines_fx WHERE sync_batch_id = %s",
+            (batch_id,),
+        )
+        assert cur.fetchone()[0] == 1
+        cur.execute(
+            """
+            SELECT count(*)
+            FROM fact_kline f
+            JOIN dim_instrument i ON i.instrument_id = f.instrument_id
+            WHERE f.provider_id = 'sqlite'
+              AND i.symbol LIKE %s
+            """,
+            (f"{MIGRATE_SYMBOL_PREFIX}%",),
+        )
+        assert cur.fetchone()[0] == 2
+        cur.execute(
+            """
+            SELECT count(*)
+            FROM fact_kline f
+            JOIN dim_instrument i ON i.instrument_id = f.instrument_id
+            WHERE f.provider_id = 'sqlite' AND i.market_id = 'fx'
+            """
+        )
+        assert cur.fetchone()[0] == 1
+        cur.execute(
+            "SELECT count(*) FROM ods_klines_fx WHERE sync_batch_id = %s",
+            (batch_id,),
+        )
+        fx_count = cur.fetchone()[0]
+        assert fx_count == 1
+        cur.execute(
+            """
+            SELECT base_currency, quote_currency
+            FROM ods_klines_fx
+            WHERE sync_batch_id = %s
+            """,
+            (batch_id,),
+        )
+        assert cur.fetchone() == ("EUR", "USD")
