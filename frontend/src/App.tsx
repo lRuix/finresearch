@@ -88,6 +88,7 @@ export default function App() {
   const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
   const [macroData, setMacroData] = useState<MacroPayload | null>(null);
   const [source, setSource] = useState<"live" | "mock">("mock");
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [loading, setLoading] = useState({
     screen: false,
     chart: false,
@@ -99,6 +100,32 @@ export default function App() {
   useEffect(() => {
     filtersRef.current = filters;
   }, [filters]);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const onResize = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setViewportWidth(window.innerWidth), 250);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
+  const chartLimit = useMemo(() => {
+    if (viewportWidth >= 1680) {
+      return 700;
+    }
+    if (viewportWidth >= 1366) {
+      return 480;
+    }
+    if (viewportWidth >= 1100) {
+      return 360;
+    }
+    return 220;
+  }, [viewportWidth]);
 
   const applyListResult = useCallback((result: ScreenResult) => {
     setScreenResult(result);
@@ -205,7 +232,7 @@ export default function App() {
     let cancelled = false;
     setLoading((previous) => ({ ...previous, chart: true }));
     Promise.all([
-      fetchKline(selected.market, selected.symbol, period),
+      fetchKline(selected.market, selected.symbol, period, chartLimit),
       fetchAnalysis(selected.market, selected.symbol),
     ])
       .then(([klineResponse, analysisResponse]) => {
@@ -229,7 +256,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [selected, period]);
+  }, [selected, period, chartLimit]);
 
   const refreshChart = useCallback(() => {
     if (!selected) {
@@ -237,7 +264,7 @@ export default function App() {
     }
     setLoading((previous) => ({ ...previous, chart: true }));
     Promise.all([
-      fetchKline(selected.market, selected.symbol, period),
+      fetchKline(selected.market, selected.symbol, period, chartLimit),
       fetchAnalysis(selected.market, selected.symbol),
     ])
       .then(([klineResponse, analysisResponse]) => {
@@ -251,7 +278,7 @@ export default function App() {
       .finally(() => {
         setLoading((previous) => ({ ...previous, chart: false }));
       });
-  }, [selected, period]);
+  }, [selected, period, chartLimit]);
 
   const handleRefreshAll = useCallback(() => {
     if (market === "all") {

@@ -805,7 +805,7 @@ input[type="range"] {
 
 .chart-wrap {
   position: relative;
-  height: 460px;
+  height: clamp(420px, 66vh, 920px);
   padding: 8px 6px 6px;
 }
 
