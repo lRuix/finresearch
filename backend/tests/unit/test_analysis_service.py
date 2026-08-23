@@ -82,6 +82,21 @@ def test_kline_forwards_prefer_real():
     assert sync.sync.call_args.kwargs["prefer_real"] is False
 
 
+def test_kline_backfills_local_history_when_short():
+    repo = MagicMock()
+    repo.get_klines.side_effect = [_rows(30), _rows(80)]
+    sync = MagicMock()
+    sync.sync.return_value = (_rows(), "live")
+    service = _service(repo=repo, sync=sync)
+
+    items, source = service.kline("us", "AAPL", "d", 60)
+
+    assert source == "local"
+    assert len(items) == 60
+    sync.sync.assert_called_once()
+    assert sync.sync.call_args.kwargs["force_full"] is True
+
+
 def test_recommend_uses_market_news_sentiment_and_shape():
     repo = MagicMock()
     repo.get_klines.return_value = _rows()

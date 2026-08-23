@@ -13,12 +13,17 @@ class SyncService:
 
     def sync(self, market: str, symbol: str, period: str,
              start: str | None = None, end: str | None = None,
-             prefer_real: bool = True) -> tuple[list[KlineRow], str]:
+             prefer_real: bool = True,
+             force_full: bool = False) -> tuple[list[KlineRow], str]:
         watermark = self._repository.get_watermark(market, symbol, period)
-        if end and watermark and watermark >= end:
+        if not force_full and end and watermark and watermark >= end:
             return [], "local"
         gap_start = start
-        if watermark and (gap_start is None or watermark > gap_start):
+        if (
+            not force_full
+            and watermark
+            and (gap_start is None or watermark > gap_start)
+        ):
             gap_start = watermark
         rows, source = self._datasource.get_klines_with_source(
             market, symbol, period, start=gap_start, end=end, limit=1000,

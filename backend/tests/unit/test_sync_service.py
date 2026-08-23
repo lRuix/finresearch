@@ -113,6 +113,33 @@ def test_sync_short_circuits_when_watermark_covers_end():
     assert called["count"] == 0
 
 
+def test_sync_force_full_ignores_watermark():
+    repo = FakeRepository()
+    repo.watermarks[("us", "AAPL", "d")] = "2026-08-23"
+    captured = {}
+
+    class RecordingDatasource:
+        def get_klines_with_source(self, market, symbol, period,
+                                   start=None, end=None, limit=180,
+                                   prefer_real: bool = True):
+            captured["start"] = start
+            return [], "live"
+
+        def get_klines(self, market, symbol, period, start=None, end=None,
+                       limit=180, prefer_real: bool = True):
+            rows, source = self.get_klines_with_source(
+                market, symbol, period, start, end, limit, prefer_real,
+            )
+            return rows
+
+    rows, source = SyncService(repo, RecordingDatasource()).sync(
+        "us", "AAPL", "d", end="2026-08-23", force_full=True,
+    )
+    assert captured["start"] is None
+    assert rows == []
+    assert source == "live"
+
+
 def test_sync_empty_rows_does_not_advance():
     repo = FakeRepository()
     service = SyncService(repo, FakeDatasource(rows=[]))
