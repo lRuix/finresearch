@@ -1,10 +1,8 @@
 """Seed migration helper tests."""
 from __future__ import annotations
 
-import random
 from datetime import datetime
 import sqlite3
-import string
 import uuid
 
 import psycopg
@@ -27,7 +25,8 @@ def _unique_symbol(prefix: str) -> str:
 
 
 def _unique_fx_symbol() -> str:
-    return "".join(random.choice(string.ascii_uppercase) for _ in range(6)) + "=X"
+    letters = "".join(char for char in uuid.uuid4().hex.upper() if char.isalpha())
+    return (letters + "AAAAAA")[:6] + "=X"
 
 
 def test_fx_currency_parsing_supports_common_symbol_formats():
@@ -67,37 +66,34 @@ def test_batch_ids_are_unique():
     assert _new_batch_id().startswith("seed-")
 
 
-def _cleanup_migrate_rows(dsn: str, batch_id: str | None = None) -> None:
-    """Remove test-owned rows, scoped to a batch or the migrate test prefix."""
+@pytest.fixture
+def migrate_cleanup(dsn):
+    batch_id = f"test-migrate-{uuid.uuid4()}"
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT market_id FROM dim_market")
+        before_markets = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT provider_id FROM dim_provider")
+        before_providers = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT date_key FROM dim_date")
+        before_dates = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT instrument_id FROM dim_instrument")
+        before_instruments = {row[0] for row in cur.fetchall()}
+
+    yield batch_id
+
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         symbols_by_market: dict[str, list[str]] = {}
         for market, table in MARKET_TABLES.items():
-            if batch_id is not None:
-                cur.execute(
-                    f"SELECT symbol FROM {table} WHERE sync_batch_id = %s",
-                    (batch_id,),
-                )
-                symbols_by_market[market] = [row[0] for row in cur.fetchall()]
-                cur.execute(
-                    f"DELETE FROM {table} WHERE sync_batch_id = %s",
-                    (batch_id,),
-                )
-            else:
-                cur.execute(
-                    f"""
-                    SELECT symbol FROM {table}
-                    WHERE provider = 'sqlite' AND symbol LIKE %s
-                    """,
-                    (f"{MIGRATE_SYMBOL_PREFIX}%",),
-                )
-                symbols_by_market[market] = [row[0] for row in cur.fetchall()]
-                cur.execute(
-                    f"""
-                    DELETE FROM {table}
-                    WHERE provider = 'sqlite' AND symbol LIKE %s
-                    """,
-                    (f"{MIGRATE_SYMBOL_PREFIX}%",),
-                )
+            cur.execute(
+                f"SELECT symbol FROM {table} WHERE sync_batch_id = %s",
+                (batch_id,),
+            )
+            symbols_by_market[market] = [row[0] for row in cur.fetchall()]
+            cur.execute(
+                f"DELETE FROM {table} WHERE sync_batch_id = %s",
+                (batch_id,),
+            )
 
         for market, symbols in symbols_by_market.items():
             if not symbols:
@@ -109,39 +105,23 @@ def _cleanup_migrate_rows(dsn: str, batch_id: str | None = None) -> None:
                   AND instrument_id IN (
                       SELECT instrument_id
                       FROM dim_instrument
-                      WHERE market_id = %s AND symbol = ANY(%s)
+                      WHERE market_id = %s
+                        AND symbol = ANY(%s)
+                        AND instrument_id != ALL(%s)
                   )
                 """,
-                (market, symbols),
+                (market, symbols, list(before_instruments)),
             )
             cur.execute(
                 """
                 DELETE FROM dim_instrument
-                WHERE market_id = %s AND symbol = ANY(%s)
+                WHERE market_id = %s
+                  AND symbol = ANY(%s)
+                  AND instrument_id != ALL(%s)
                 """,
-                (market, symbols),
+                (market, symbols, list(before_instruments)),
             )
-        conn.commit()
 
-
-@pytest.fixture
-def migrate_cleanup(dsn):
-    _cleanup_migrate_rows(dsn)
-    batch_id = f"test-migrate-{uuid.uuid4()}"
-
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute("SELECT market_id FROM dim_market")
-        before_markets = {row[0] for row in cur.fetchall()}
-        cur.execute("SELECT provider_id FROM dim_provider")
-        before_providers = {row[0] for row in cur.fetchall()}
-        cur.execute("SELECT date_key FROM dim_date")
-        before_dates = {row[0] for row in cur.fetchall()}
-
-    yield batch_id
-
-    _cleanup_migrate_rows(dsn, batch_id)
-
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
             DELETE FROM dim_provider
