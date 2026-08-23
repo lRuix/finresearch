@@ -1,6 +1,7 @@
 """DWD kline build helpers."""
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -8,6 +9,8 @@ from psycopg.rows import dict_row
 
 from etl.db import connect
 from etl.load_ods import MARKET_TABLES
+
+logger = logging.getLogger(__name__)
 
 
 MARKET_META = {
@@ -35,6 +38,10 @@ def _normalize_period(value: str) -> str:
 
 
 def _parse_time(value: str) -> datetime:
+    """Parse an ODS timestamp as UTC-aware.
+
+    Naive timestamps are interpreted as UTC; a trailing Z is equivalent to +00:00.
+    """
     text = str(value).strip()
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
@@ -115,14 +122,25 @@ def _ensure_instrument(cur: Any, market_id: str, symbol: str) -> int:
     return cur.fetchone()["instrument_id"]
 
 
-def _map_ohlc(row: dict[str, Any], market: str) -> tuple[float, float, float, float]:
+def _map_ohlc(
+    row: dict[str, Any], market: str
+) -> tuple[float | None, float | None, float | None, float | None]:
+    """Return normalized OHLC values, allowing None for rows that must be skipped."""
     if market == "fx":
-        return (
-            row["open_rate"],
-            row["high_rate"],
-            row["low_rate"],
-            row["close_rate"],
-        )
+        close = row.get("close_rate")
+        if close is None:
+            close = row.get("prev_rate")
+
+        open_ = row.get("open_rate")
+        high = row.get("high_rate")
+        low = row.get("low_rate")
+        if open_ is None:
+            open_ = close
+        if high is None:
+            high = close
+        if low is None:
+            low = close
+        return open_, high, low, close
 
     open_ = row.get("open")
     high = row.get("high")
@@ -134,11 +152,11 @@ def _map_ohlc(row: dict[str, Any], market: str) -> tuple[float, float, float, fl
         if close is None:
             close = nav
         if open_ is None:
-            open_ = close if close is not None else nav
+            open_ = close
         if high is None:
-            high = close if close is not None else nav
+            high = close
         if low is None:
-            low = close if close is not None else nav
+            low = close
 
     return open_, high, low, close
 
@@ -150,7 +168,9 @@ def build_dwd(dsn: str, market: str) -> int:
         raise ValueError(f"unknown market: {market}")
 
     with connect(dsn) as conn, conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(f"SELECT * FROM {table}")
+        # 排序保证同键多 provider 时写入顺序确定；当前按排序后的最后一行生效，
+        # 主源优先级语义后续由 ODS 层显式标记。
+        cur.execute(f"SELECT * FROM {table} ORDER BY provider, symbol, interval, ts")
         ods_rows = cur.fetchall()
         if not ods_rows:
             return 0
@@ -158,17 +178,37 @@ def build_dwd(dsn: str, market: str) -> int:
         _ensure_market(cur, market)
         affected = 0
         for row in ods_rows:
+            try:
+                time = _parse_time(row["ts"])
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Skipping %s kline symbol=%s ts=%s: invalid timestamp",
+                    market,
+                    row.get("symbol"),
+                    row.get("ts"),
+                )
+                continue
+
+            open_, high, low, close = _map_ohlc(row, market)
+            if any(value is None for value in (open_, high, low, close)):
+                logger.warning(
+                    "Skipping %s kline symbol=%s ts=%s: missing required OHLC values",
+                    market,
+                    row.get("symbol"),
+                    row.get("ts"),
+                )
+                continue
+
+            # date_key 取 time 的 UTC 自然日。
+            date_key = time.astimezone(timezone.utc).date()
+
             provider_id = row["provider"]
             symbol = row["symbol"]
             instrument_id = _ensure_instrument(cur, market, symbol)
             _ensure_provider(cur, provider_id)
-
-            period = _normalize_period(row["interval"])
-            time = _parse_time(row["ts"])
-            date_key = time.date()
             _ensure_date(cur, date_key)
 
-            open_, high, low, close = _map_ohlc(row, market)
+            period = _normalize_period(row["interval"])
             if market == "fx":
                 volume = 0.0
             else:

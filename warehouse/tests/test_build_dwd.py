@@ -59,6 +59,18 @@ def dwd_cleanup(dsn):
         if symbols:
             cur.execute(
                 """
+                DELETE FROM fact_kline
+                WHERE provider_id = %s
+                  AND instrument_id IN (
+                      SELECT instrument_id
+                      FROM dim_instrument
+                      WHERE symbol = ANY(%s)
+                  )
+                """,
+                (provider_id, symbols),
+            )
+            cur.execute(
+                """
                 SELECT instrument_id
                 FROM dim_instrument
                 WHERE symbol = ANY(%s)
@@ -68,14 +80,6 @@ def dwd_cleanup(dsn):
             )
             created_instrument_ids = [row[0] for row in cur.fetchall()]
             if created_instrument_ids:
-                cur.execute(
-                    """
-                    DELETE FROM fact_kline
-                    WHERE provider_id = %s
-                      AND instrument_id = ANY(%s)
-                    """,
-                    (provider_id, created_instrument_ids),
-                )
                 cur.execute(
                     "DELETE FROM dim_instrument WHERE instrument_id = ANY(%s)",
                     (created_instrument_ids,),
@@ -161,7 +165,7 @@ def _fx_row(
     batch_id: str,
     **overrides: Any,
 ) -> dict[str, Any]:
-    return _base_row(
+    row = _base_row(
         provider_id,
         "fx",
         symbol,
@@ -173,8 +177,9 @@ def _fx_row(
         open_rate=7.05,
         high_rate=7.25,
         low_rate=7.01,
-        **overrides,
     )
+    row.update(overrides)
+    return row
 
 
 def _fund_row(
@@ -183,14 +188,15 @@ def _fund_row(
     batch_id: str,
     **overrides: Any,
 ) -> dict[str, Any]:
-    return _base_row(
+    row = _base_row(
         provider_id,
         "fund",
         symbol,
         batch_id,
         nav=2.8960,
-        **overrides,
     )
+    row.update(overrides)
+    return row
 
 
 def _fact_row(dsn: str, market_id: str, symbol: str, period: str | None = None):
@@ -205,9 +211,25 @@ def _fact_row(dsn: str, market_id: str, symbol: str, period: str | None = None):
     if period is not None:
         sql += " AND f.period = %s"
         params.append(period)
+    sql += " ORDER BY f.period, f.time"
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchall()
+
+
+def _instrument_id(dsn: str, market_id: str, symbol: str) -> int:
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT instrument_id
+            FROM dim_instrument
+            WHERE market_id = %s AND symbol = %s
+            """,
+            (market_id, symbol),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        return row[0]
 
 
 def test_a_share_ohlcv_maps_to_fact_kline(dsn, dwd_cleanup):
@@ -362,6 +384,193 @@ def test_periods_are_normalized(dsn, dwd_cleanup):
     assert [row[4] for row in rows] == ["d", "h", "w"]
 
 
+def test_fx_missing_open_high_low_uses_close_rate(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-FX-FALLBACK")
+    dwd_cleanup.symbols.append(symbol)
+    row = _fx_row(
+        dwd_cleanup.provider_id,
+        symbol,
+        dwd_cleanup.batch_id,
+        open_rate=None,
+        high_rate=None,
+        low_rate=None,
+    )
+
+    upsert_ods_rows(dsn, "fx", [row])
+    affected = build_dwd(dsn, "fx")
+
+    rows = _fact_row(dsn, "fx", symbol)
+    assert affected == 1
+    assert len(rows) == 1
+    assert rows[0][6] == pytest.approx(row["close_rate"])
+    assert rows[0][7] == pytest.approx(row["close_rate"])
+    assert rows[0][8] == pytest.approx(row["close_rate"])
+    assert rows[0][9] == pytest.approx(row["close_rate"])
+
+
+def test_fx_missing_close_and_prev_rate_is_skipped(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-FX-SKIP")
+    dwd_cleanup.symbols.append(symbol)
+    row = _fx_row(
+        dwd_cleanup.provider_id,
+        symbol,
+        dwd_cleanup.batch_id,
+        close_rate=None,
+        prev_rate=None,
+    )
+
+    upsert_ods_rows(dsn, "fx", [row])
+    affected = build_dwd(dsn, "fx")
+
+    assert affected == 0
+    assert _fact_row(dsn, "fx", symbol) == []
+
+
+def test_fund_missing_close_and_nav_is_skipped(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-FUND-SKIP")
+    dwd_cleanup.symbols.append(symbol)
+    row = _fund_row(
+        dwd_cleanup.provider_id,
+        symbol,
+        dwd_cleanup.batch_id,
+        close=None,
+        nav=None,
+    )
+
+    upsert_ods_rows(dsn, "fund", [row])
+    affected = build_dwd(dsn, "fund")
+
+    assert affected == 0
+    assert _fact_row(dsn, "fund", symbol) == []
+
+
+def test_a_share_skips_invalid_ohlc_without_aborting_other_rows(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-A-PARTIAL")
+    provider_id = dwd_cleanup.provider_id
+    batch_id = dwd_cleanup.batch_id
+    dwd_cleanup.symbols.append(symbol)
+    valid = _a_share_row(
+        provider_id,
+        symbol,
+        batch_id,
+        ts="2099-01-05T12:00:00+08:00",
+    )
+    invalid = _a_share_row(
+        provider_id,
+        symbol,
+        batch_id,
+        ts="2099-01-06T12:00:00+08:00",
+        open=None,
+    )
+
+    upsert_ods_rows(dsn, "a-share", [invalid, valid])
+    affected = build_dwd(dsn, "a-share")
+
+    rows = _fact_row(dsn, "a-share", symbol)
+    assert affected == 1
+    assert len(rows) == 1
+    assert rows[0][3] == date(2099, 1, 5)
+    assert rows[0][5] == datetime(2099, 1, 5, 4, 0, tzinfo=timezone.utc)
+
+
+def test_invalid_time_row_is_skipped(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-TIME-INVALID")
+    dwd_cleanup.symbols.append(symbol)
+    row = _a_share_row(
+        dwd_cleanup.provider_id,
+        symbol,
+        dwd_cleanup.batch_id,
+        ts="not-a-timestamp",
+    )
+
+    upsert_ods_rows(dsn, "a-share", [row])
+    affected = build_dwd(dsn, "a-share")
+
+    assert affected == 0
+    assert _fact_row(dsn, "a-share", symbol) == []
+
+
+def test_valid_and_invalid_time_rows_commit_valid_row(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-TIME-MIXED")
+    provider_id = dwd_cleanup.provider_id
+    batch_id = dwd_cleanup.batch_id
+    dwd_cleanup.symbols.append(symbol)
+    valid = _a_share_row(
+        provider_id,
+        symbol,
+        batch_id,
+        ts="2099-01-05T00:30:00+08:00",
+    )
+    invalid = _a_share_row(
+        provider_id,
+        symbol,
+        batch_id,
+        ts="not-a-timestamp",
+    )
+
+    upsert_ods_rows(dsn, "a-share", [invalid, valid])
+    affected = build_dwd(dsn, "a-share")
+
+    rows = _fact_row(dsn, "a-share", symbol)
+    assert affected == 1
+    assert len(rows) == 1
+    assert rows[0][3] == date(2099, 1, 4)
+    assert rows[0][5] == datetime(2099, 1, 4, 16, 30, tzinfo=timezone.utc)
+
+
+def test_time_parsing_uses_utc_natural_day(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-TIME")
+    provider_id = dwd_cleanup.provider_id
+    batch_id = dwd_cleanup.batch_id
+    dwd_cleanup.symbols.append(symbol)
+    rows = [
+        _a_share_row(
+            provider_id,
+            symbol,
+            batch_id,
+            interval="1d",
+            ts="2099-01-05T12:00:00",
+        ),
+        _a_share_row(
+            provider_id,
+            symbol,
+            batch_id,
+            interval="1h",
+            ts="2099-01-05T12:00:00Z",
+        ),
+        _a_share_row(
+            provider_id,
+            symbol,
+            batch_id,
+            interval="1w",
+            ts="2099-01-06T00:30:00+08:00",
+        ),
+        _a_share_row(
+            provider_id,
+            symbol,
+            batch_id,
+            interval="1m",
+            ts="2099-01-05T23:30:00-08:00",
+        ),
+    ]
+
+    upsert_ods_rows(dsn, "a-share", rows)
+    affected = build_dwd(dsn, "a-share")
+
+    fact_rows = _fact_row(dsn, "a-share", symbol)
+    by_period = {row[4]: row for row in fact_rows}
+    assert affected == 4
+    assert len(fact_rows) == 4
+    assert by_period["d"][3] == date(2099, 1, 5)
+    assert by_period["d"][5] == datetime(2099, 1, 5, 12, 0, tzinfo=timezone.utc)
+    assert by_period["h"][3] == date(2099, 1, 5)
+    assert by_period["h"][5] == datetime(2099, 1, 5, 12, 0, tzinfo=timezone.utc)
+    assert by_period["w"][3] == date(2099, 1, 5)
+    assert by_period["w"][5] == datetime(2099, 1, 5, 16, 30, tzinfo=timezone.utc)
+    assert by_period["1m"][3] == date(2099, 1, 6)
+    assert by_period["1m"][5] == datetime(2099, 1, 6, 7, 30, tzinfo=timezone.utc)
+
+
 def test_build_dwd_is_idempotent_and_updates_business_fields(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-IDEMPOTENT")
     dwd_cleanup.symbols.append(symbol)
@@ -418,8 +627,10 @@ def test_dimensions_are_backfilled_without_duplicates(dsn, dwd_cleanup):
     row = _a_share_row(provider_id, symbol, dwd_cleanup.batch_id)
 
     upsert_ods_rows(dsn, "a-share", [row])
-    first_instrument_id = build_dwd(dsn, "a-share")
-    second_instrument_id = build_dwd(dsn, "a-share")
+    first_affected = build_dwd(dsn, "a-share")
+    first_instrument_id = _instrument_id(dsn, "a-share", symbol)
+    second_affected = build_dwd(dsn, "a-share")
+    second_instrument_id = _instrument_id(dsn, "a-share", symbol)
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM dim_market WHERE market_id = %s", ("a-share",))
@@ -444,8 +655,10 @@ def test_dimensions_are_backfilled_without_duplicates(dsn, dwd_cleanup):
         )
         instrument_count = cur.fetchone()[0]
 
-    assert first_instrument_id == 1
-    assert second_instrument_id == 1
+    assert first_affected == 1
+    assert second_affected == 1
+    assert first_instrument_id == second_instrument_id
+    assert first_instrument_id > 0
     assert market_count == 1
     assert provider_count == 1
     assert date_count == 1
