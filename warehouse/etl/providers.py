@@ -2,15 +2,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 
 
 def _is_blank(value: object) -> bool:
-    if isinstance(value, str):
-        return not value.strip() or value.strip().lower() == "none"
-    return False
+    if not isinstance(value, str):
+        return False
+    cleaned = value.strip().lower()
+    return not cleaned or cleaned in {"none", "null", "nan", "-"}
 
 
 def _to_iso_timestamp(value: object) -> str | None:
+    # Binance open_time is milliseconds (13-digit magnitude) while Gate
+    # timestamp is seconds (10-digit magnitude). Values at or above
+    # 100_000_000_000 are treated as milliseconds, smaller values as seconds.
     if value is None or _is_blank(value):
         return None
     try:
@@ -31,9 +36,12 @@ def _to_float(value: object) -> float | None:
     if value is None or _is_blank(value):
         return None
     try:
-        return float(value)
+        result = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(result):
+        return None
+    return result
 
 
 def _to_int(value: object) -> int | None:

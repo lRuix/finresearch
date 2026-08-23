@@ -1,5 +1,8 @@
 """Provider parsing tests."""
 from etl.providers import (
+    _to_float,
+    _to_int,
+    _to_iso_timestamp,
     parse_binance_klines,
     parse_eastmoney_fund,
     parse_gate_klines,
@@ -26,9 +29,44 @@ def test_parse_binance_klines():
     assert rows[0]["high"] == 78828.15
     assert rows[0]["low"] == 76500.00
     assert rows[0]["close"] == 77074.93
+    assert rows[0]["volume"] == 18524.50
     assert rows[0]["quote_volume"] == 1433768388.59
     assert rows[0]["trades_count"] == 3950045
     assert rows[0]["raw"] == raw[0]
+
+
+def test_parse_binance_klines_none_row():
+    rows = parse_binance_klines([[None]])
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["time"] is None
+    assert row["open"] is None
+    assert row["high"] is None
+    assert row["low"] is None
+    assert row["close"] is None
+    assert row["volume"] is None
+    assert row["quote_volume"] is None
+    assert row["trades_count"] is None
+    assert row["raw"] == [None]
+
+
+def test_invalid_string_conversions():
+    assert _to_float("abc") is None
+    assert _to_int("abc") is None
+    assert _to_float("") is None
+    assert _to_int("") is None
+
+
+def test_to_iso_timestamp_millisecond_boundary():
+    assert _to_iso_timestamp(999_999_999_999) == "2001-09-09T01:46:39.999000+00:00"
+
+
+def test_blank_markers_and_non_finite_floats():
+    assert _to_float("null") is None
+    assert _to_float("NaN") is None
+    assert _to_float("inf") is None
+    assert _to_float("-inf") is None
+    assert _to_float("-") is None
 
 
 def test_parse_gate_klines():
