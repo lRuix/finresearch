@@ -1,6 +1,6 @@
 -- fact_kline.provider_id 表示该行采用的主源 provider，不是多 provider 并存。
 -- DWD 装载按 (market_id, instrument_id, period, time) 做 ON CONFLICT DO UPDATE，
--- 主源优先级由 ODS 层决定。
+-- 主源优先级由 DWD 装载的 PROVIDER_PRIORITY 决定。
 CREATE TABLE IF NOT EXISTS fact_kline (
   market_id TEXT NOT NULL,
   instrument_id BIGINT NOT NULL,
