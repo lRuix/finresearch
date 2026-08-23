@@ -1,7 +1,7 @@
 CREATE MATERIALIZED VIEW IF NOT EXISTS dws_instrument_daily AS
 SELECT market_id, instrument_id, date_key,
        count(*) AS rows_count,
-       (max(close) - min(close)) / NULLIF(min(close), 0) AS amplitude,
+       (max(high) - min(low)) / NULLIF(min(low), 0) AS amplitude,
        max(close) AS last_close,
        sum(volume) AS total_volume
 FROM fact_kline

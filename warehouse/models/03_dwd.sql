@@ -1,3 +1,6 @@
+-- fact_kline.provider_id 表示该行采用的主源 provider，不是多 provider 并存。
+-- DWD 装载按 (market_id, instrument_id, period, time) 做 ON CONFLICT DO UPDATE，
+-- 主源优先级由 ODS 层决定。
 CREATE TABLE IF NOT EXISTS fact_kline (
   market_id TEXT NOT NULL,
   instrument_id BIGINT NOT NULL,
@@ -12,6 +15,15 @@ CREATE TABLE IF NOT EXISTS fact_kline (
   volume REAL NOT NULL,
   PRIMARY KEY (market_id, instrument_id, period, time)
 ) PARTITION BY RANGE (time);
+
+CREATE TABLE IF NOT EXISTS fact_kline_2024 PARTITION OF fact_kline
+  FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
+
+CREATE TABLE IF NOT EXISTS fact_kline_2025 PARTITION OF fact_kline
+  FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
+
+CREATE TABLE IF NOT EXISTS fact_kline_2026 PARTITION OF fact_kline
+  FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
 
 CREATE TABLE IF NOT EXISTS fact_kline_default PARTITION OF fact_kline DEFAULT;
 
