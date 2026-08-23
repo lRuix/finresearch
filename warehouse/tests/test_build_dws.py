@@ -32,6 +32,8 @@ def dws_cleanup(dsn):
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT provider_id FROM dim_provider")
         before_providers = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT date_key FROM dim_date")
+        before_dates = {row[0] for row in cur.fetchall()}
         cur.execute("SELECT market_id, symbol FROM dim_instrument")
         before_instrument_symbols: dict[str, set[str]] = {}
         for market_id, symbol in cur.fetchall():
@@ -42,14 +44,19 @@ def dws_cleanup(dsn):
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         market_symbols: dict[str, list[str]] = {}
+        test_dates: set[date] = set()
         for market, table in MARKET_TABLES.items():
             cur.execute(
-                f"SELECT symbol FROM {table} WHERE sync_batch_id = %s",
+                f"SELECT symbol, ts FROM {table} WHERE sync_batch_id = %s",
                 (batch_id,),
             )
-            market_symbols[market] = [row[0] for row in cur.fetchall()]
-
-        for market, table in MARKET_TABLES.items():
+            rows = cur.fetchall()
+            market_symbols[market] = [row[0] for row in rows]
+            for row in rows:
+                try:
+                    test_dates.add(date.fromisoformat(row[1][:10]))
+                except (TypeError, ValueError):
+                    pass
             cur.execute(
                 f"DELETE FROM {table} WHERE sync_batch_id = %s",
                 (batch_id,),
@@ -114,6 +121,15 @@ def dws_cleanup(dsn):
             cur.execute(
                 "DELETE FROM dim_provider WHERE provider_id = ANY(%s)",
                 (providers,),
+            )
+        if test_dates:
+            cur.execute(
+                """
+                DELETE FROM dim_date
+                WHERE date_key = ANY(%s)
+                  AND date_key != ALL(%s)
+                """,
+                (sorted(test_dates), sorted(before_dates)),
             )
         conn.commit()
 
