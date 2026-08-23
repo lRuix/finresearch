@@ -32,13 +32,26 @@ _PERIOD_ALIASES = {
     "w": "w",
 }
 
+PROVIDER_PRIORITY = {
+    "tencent": 100,
+    "naver": 100,
+    "gate": 100,
+    "frankfurter": 100,
+    "eastmoney-fund": 100,
+    "binance": 80,
+    "yfinance": 80,
+    "akshare": 80,
+    "mock": 0,
+}
+_UNKNOWN_PROVIDER_PRIORITY = 50
+
 
 def _normalize_period(value: str) -> str:
     return _PERIOD_ALIASES.get(str(value).lower(), str(value))
 
 
 def _parse_time(value: str) -> datetime:
-    """Parse an ODS timestamp as UTC-aware.
+    """Parse an ODS timestamp and normalize it to UTC-aware.
 
     Naive timestamps are interpreted as UTC; a trailing Z is equivalent to +00:00.
     """
@@ -48,7 +61,7 @@ def _parse_time(value: str) -> datetime:
     parsed = datetime.fromisoformat(text)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
+    return parsed.astimezone(timezone.utc)
 
 
 def _ensure_market(cur: Any, market_id: str) -> None:
@@ -168,15 +181,16 @@ def build_dwd(dsn: str, market: str) -> int:
         raise ValueError(f"unknown market: {market}")
 
     with connect(dsn) as conn, conn.cursor(row_factory=dict_row) as cur:
-        # 排序保证同键多 provider 时写入顺序确定；当前按排序后的最后一行生效，
-        # 主源优先级语义后续由 ODS 层显式标记。
+        # 先按原始键取一个稳定读取顺序；主源优先级在 Python 中统一排序。
         cur.execute(f"SELECT * FROM {table} ORDER BY provider, symbol, interval, ts")
         ods_rows = cur.fetchall()
         if not ods_rows:
             return 0
 
-        _ensure_market(cur, market)
-        affected = 0
+        # 同一 (symbol, normalized period, UTC time) 可能来自多个 provider。
+        # 低优先级先写入、高优先级后写入；ON CONFLICT 会覆盖之前的值，
+        # 因此 fact_kline.provider_id 与 OHLC 值来自最终胜出的主源 provider。
+        prepared_rows: list[tuple[Any, dict[str, Any], str, datetime]] = []
         for row in ods_rows:
             try:
                 time = _parse_time(row["ts"])
@@ -189,6 +203,21 @@ def build_dwd(dsn: str, market: str) -> int:
                 )
                 continue
 
+            period = _normalize_period(row["interval"])
+            priority = PROVIDER_PRIORITY.get(row["provider"], _UNKNOWN_PROVIDER_PRIORITY)
+            prepared_rows.append(
+                (
+                    (priority, row["provider"], row["symbol"], period, time),
+                    row,
+                    period,
+                    time,
+                )
+            )
+        prepared_rows.sort(key=lambda item: item[0])
+
+        _ensure_market(cur, market)
+        affected = 0
+        for _, row, period, time in prepared_rows:
             open_, high, low, close = _map_ohlc(row, market)
             if any(value is None for value in (open_, high, low, close)):
                 logger.warning(
@@ -208,7 +237,6 @@ def build_dwd(dsn: str, market: str) -> int:
             _ensure_provider(cur, provider_id)
             _ensure_date(cur, date_key)
 
-            period = _normalize_period(row["interval"])
             if market == "fx":
                 volume = 0.0
             else:

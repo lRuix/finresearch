@@ -10,32 +10,20 @@ import psycopg
 import pytest
 
 from etl.build_dwd import build_dwd
-from etl.load_ods import upsert_ods_rows
-
-
-ODS_TABLES = [
-    "ods_klines_a_share",
-    "ods_klines_fund",
-    "ods_klines_us",
-    "ods_klines_kr",
-    "ods_klines_hk",
-    "ods_klines_fx",
-    "ods_klines_crypto",
-]
+from etl.load_ods import MARKET_TABLES, upsert_ods_rows
 
 
 @dataclass
 class DwdCleanupContext:
     batch_id: str
     provider_id: str
-    symbols: list[str] = field(default_factory=list)
+    provider_ids: list[str] = field(default_factory=list)
 
 
 @pytest.fixture
 def dwd_cleanup(dsn):
     batch_id = f"test-build-dwd-{uuid.uuid4()}"
     provider_id = f"test-build-dwd-{uuid.uuid4().hex}"
-    symbols: list[str] = []
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT market_id FROM dim_market")
@@ -47,36 +35,48 @@ def dwd_cleanup(dsn):
         cur.execute("SELECT instrument_id FROM dim_instrument")
         before_instruments = {row[0] for row in cur.fetchall()}
 
-    yield DwdCleanupContext(batch_id, provider_id, symbols)
+    context = DwdCleanupContext(batch_id, provider_id)
+    yield context
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-        for table in ODS_TABLES:
+        market_symbols: dict[str, list[str]] = {}
+        for market, table in MARKET_TABLES.items():
+            cur.execute(
+                f"SELECT symbol FROM {table} WHERE sync_batch_id = %s",
+                (batch_id,),
+            )
+            market_symbols[market] = [row[0] for row in cur.fetchall()]
             cur.execute(
                 f"DELETE FROM {table} WHERE sync_batch_id = %s",
                 (batch_id,),
             )
 
-        if symbols:
+        providers = sorted({context.provider_id, *context.provider_ids})
+        for market, symbols in market_symbols.items():
+            if not symbols:
+                continue
+
             cur.execute(
                 """
                 DELETE FROM fact_kline
-                WHERE provider_id = %s
+                WHERE provider_id = ANY(%s)
                   AND instrument_id IN (
                       SELECT instrument_id
                       FROM dim_instrument
-                      WHERE symbol = ANY(%s)
+                      WHERE market_id = %s AND symbol = ANY(%s)
                   )
                 """,
-                (provider_id, symbols),
+                (providers, market, symbols),
             )
             cur.execute(
                 """
                 SELECT instrument_id
                 FROM dim_instrument
-                WHERE symbol = ANY(%s)
+                WHERE market_id = %s
+                  AND symbol = ANY(%s)
                   AND instrument_id != ALL(%s)
                 """,
-                (symbols, list(before_instruments)),
+                (market, symbols, list(before_instruments)),
             )
             created_instrument_ids = [row[0] for row in cur.fetchall()]
             if created_instrument_ids:
@@ -86,8 +86,8 @@ def dwd_cleanup(dsn):
                 )
 
         cur.execute(
-            "DELETE FROM dim_provider WHERE provider_id = %s AND provider_id != ALL(%s)",
-            (provider_id, list(before_providers)),
+            "DELETE FROM dim_provider WHERE provider_id = ANY(%s) AND provider_id != ALL(%s)",
+            (providers, list(before_providers)),
         )
         cur.execute(
             """
@@ -234,7 +234,6 @@ def _instrument_id(dsn: str, market_id: str, symbol: str) -> int:
 
 def test_a_share_ohlcv_maps_to_fact_kline(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-A")
-    dwd_cleanup.symbols.append(symbol)
     row = _a_share_row(dwd_cleanup.provider_id, symbol, dwd_cleanup.batch_id)
 
     upsert_ods_rows(dsn, "a-share", [row])
@@ -272,7 +271,6 @@ def test_a_share_ohlcv_maps_to_fact_kline(dsn, dwd_cleanup):
 
 def test_fx_rates_map_to_ohlc_and_volume_is_zero(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-FX")
-    dwd_cleanup.symbols.append(symbol)
     row = _fx_row(dwd_cleanup.provider_id, symbol, dwd_cleanup.batch_id)
 
     upsert_ods_rows(dsn, "fx", [row])
@@ -304,7 +302,6 @@ def test_fx_rates_map_to_ohlc_and_volume_is_zero(dsn, dwd_cleanup):
 
 def test_fund_nav_backfills_ohlc(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-FUND")
-    dwd_cleanup.symbols.append(symbol)
     row = _fund_row(dwd_cleanup.provider_id, symbol, dwd_cleanup.batch_id)
 
     upsert_ods_rows(dsn, "fund", [row])
@@ -335,7 +332,6 @@ def test_fund_nav_backfills_ohlc(dsn, dwd_cleanup):
 
 def test_periods_are_normalized(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-PERIOD")
-    dwd_cleanup.symbols.append(symbol)
     provider_id = dwd_cleanup.provider_id
     batch_id = dwd_cleanup.batch_id
     rows = [
@@ -386,7 +382,6 @@ def test_periods_are_normalized(dsn, dwd_cleanup):
 
 def test_fx_missing_open_high_low_uses_close_rate(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-FX-FALLBACK")
-    dwd_cleanup.symbols.append(symbol)
     row = _fx_row(
         dwd_cleanup.provider_id,
         symbol,
@@ -408,9 +403,62 @@ def test_fx_missing_open_high_low_uses_close_rate(dsn, dwd_cleanup):
     assert rows[0][9] == pytest.approx(row["close_rate"])
 
 
+def test_fx_missing_close_rate_uses_prev_rate(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-FX-PREV")
+    row = _fx_row(
+        dwd_cleanup.provider_id,
+        symbol,
+        dwd_cleanup.batch_id,
+        close_rate=None,
+    )
+
+    upsert_ods_rows(dsn, "fx", [row])
+    affected = build_dwd(dsn, "fx")
+
+    rows = _fact_row(dsn, "fx", symbol)
+    assert affected == 1
+    assert len(rows) == 1
+    assert rows[0][9] == pytest.approx(row["prev_rate"])
+
+
+def test_primary_provider_wins_over_mock(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-PROVIDER")
+    dwd_cleanup.provider_ids.extend(["mock", "frankfurter"])
+    mock_row = _fx_row(
+        "mock",
+        symbol,
+        dwd_cleanup.batch_id,
+        close_rate=6.4,
+        prev_rate=6.3,
+        open_rate=6.2,
+        high_rate=6.5,
+        low_rate=6.1,
+    )
+    primary_row = _fx_row(
+        "frankfurter",
+        symbol,
+        dwd_cleanup.batch_id,
+        close_rate=7.3,
+        prev_rate=7.2,
+        open_rate=7.1,
+        high_rate=7.4,
+        low_rate=7.0,
+    )
+
+    upsert_ods_rows(dsn, "fx", [mock_row, primary_row])
+    build_dwd(dsn, "fx")
+
+    rows = _fact_row(dsn, "fx", symbol)
+    assert len(rows) == 1
+    assert rows[0][2] == "frankfurter"
+    assert rows[0][6] == pytest.approx(primary_row["open_rate"])
+    assert rows[0][7] == pytest.approx(primary_row["high_rate"])
+    assert rows[0][8] == pytest.approx(primary_row["low_rate"])
+    assert rows[0][9] == pytest.approx(primary_row["close_rate"])
+
+
 def test_fx_missing_close_and_prev_rate_is_skipped(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-FX-SKIP")
-    dwd_cleanup.symbols.append(symbol)
     row = _fx_row(
         dwd_cleanup.provider_id,
         symbol,
@@ -428,7 +476,6 @@ def test_fx_missing_close_and_prev_rate_is_skipped(dsn, dwd_cleanup):
 
 def test_fund_missing_close_and_nav_is_skipped(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-FUND-SKIP")
-    dwd_cleanup.symbols.append(symbol)
     row = _fund_row(
         dwd_cleanup.provider_id,
         symbol,
@@ -448,7 +495,6 @@ def test_a_share_skips_invalid_ohlc_without_aborting_other_rows(dsn, dwd_cleanup
     symbol = _unique_symbol("TEST-A-PARTIAL")
     provider_id = dwd_cleanup.provider_id
     batch_id = dwd_cleanup.batch_id
-    dwd_cleanup.symbols.append(symbol)
     valid = _a_share_row(
         provider_id,
         symbol,
@@ -475,7 +521,6 @@ def test_a_share_skips_invalid_ohlc_without_aborting_other_rows(dsn, dwd_cleanup
 
 def test_invalid_time_row_is_skipped(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-TIME-INVALID")
-    dwd_cleanup.symbols.append(symbol)
     row = _a_share_row(
         dwd_cleanup.provider_id,
         symbol,
@@ -494,7 +539,6 @@ def test_valid_and_invalid_time_rows_commit_valid_row(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-TIME-MIXED")
     provider_id = dwd_cleanup.provider_id
     batch_id = dwd_cleanup.batch_id
-    dwd_cleanup.symbols.append(symbol)
     valid = _a_share_row(
         provider_id,
         symbol,
@@ -522,7 +566,6 @@ def test_time_parsing_uses_utc_natural_day(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-TIME")
     provider_id = dwd_cleanup.provider_id
     batch_id = dwd_cleanup.batch_id
-    dwd_cleanup.symbols.append(symbol)
     rows = [
         _a_share_row(
             provider_id,
@@ -571,9 +614,48 @@ def test_time_parsing_uses_utc_natural_day(dsn, dwd_cleanup):
     assert by_period["1m"][5] == datetime(2099, 1, 6, 7, 30, tzinfo=timezone.utc)
 
 
+def test_explicit_partition_receives_kline(dsn, dwd_cleanup):
+    symbol = _unique_symbol("TEST-PARTITION")
+    row = _a_share_row(
+        dwd_cleanup.provider_id,
+        symbol,
+        dwd_cleanup.batch_id,
+        ts="2025-06-15T12:00:00+08:00",
+    )
+
+    upsert_ods_rows(dsn, "a-share", [row])
+    build_dwd(dsn, "a-share")
+
+    rows = _fact_row(dsn, "a-share", symbol)
+    assert len(rows) == 1
+    assert rows[0][3] == date(2025, 6, 15)
+    assert rows[0][5] == datetime(2025, 6, 15, 4, 0, tzinfo=timezone.utc)
+
+    instrument_id = _instrument_id(dsn, "a-share", symbol)
+    time = datetime(2025, 6, 15, 4, 0, tzinfo=timezone.utc)
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*)
+            FROM fact_kline_2025
+            WHERE instrument_id = %s AND period = 'd' AND time = %s
+            """,
+            (instrument_id, time),
+        )
+        assert cur.fetchone()[0] == 1
+        cur.execute(
+            """
+            SELECT count(*)
+            FROM fact_kline_default
+            WHERE instrument_id = %s AND period = 'd' AND time = %s
+            """,
+            (instrument_id, time),
+        )
+        assert cur.fetchone()[0] == 0
+
+
 def test_build_dwd_is_idempotent_and_updates_business_fields(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-IDEMPOTENT")
-    dwd_cleanup.symbols.append(symbol)
     row = _a_share_row(
         dwd_cleanup.provider_id,
         symbol,
@@ -622,7 +704,6 @@ def test_build_dwd_is_idempotent_and_updates_business_fields(dsn, dwd_cleanup):
 
 def test_dimensions_are_backfilled_without_duplicates(dsn, dwd_cleanup):
     symbol = _unique_symbol("TEST-DIM")
-    dwd_cleanup.symbols.append(symbol)
     provider_id = dwd_cleanup.provider_id
     row = _a_share_row(provider_id, symbol, dwd_cleanup.batch_id)
 
