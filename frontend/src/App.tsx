@@ -88,7 +88,10 @@ export default function App() {
   const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
   const [macroData, setMacroData] = useState<MacroPayload | null>(null);
   const [source, setSource] = useState<"live" | "mock">("mock");
-  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [viewport, setViewport] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
   const [loading, setLoading] = useState({
     screen: false,
     chart: false,
@@ -105,7 +108,14 @@ export default function App() {
     let timer: number | undefined;
     const onResize = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => setViewportWidth(window.innerWidth), 250);
+      timer = window.setTimeout(
+        () =>
+          setViewport({
+            width: window.innerWidth,
+            height: window.innerHeight,
+          }),
+        250,
+      );
     };
     window.addEventListener("resize", onResize);
     return () => {
@@ -115,17 +125,39 @@ export default function App() {
   }, []);
 
   const chartLimit = useMemo(() => {
-    if (viewportWidth >= 1680) {
-      return 700;
+    const widthLimit =
+      viewport.width >= 1680
+        ? 700
+        : viewport.width >= 1366
+          ? 480
+          : viewport.width >= 1100
+            ? 360
+            : 220;
+    const heightLimit =
+      viewport.height >= 1100
+        ? 700
+        : viewport.height >= 900
+          ? 520
+          : viewport.height >= 760
+            ? 400
+            : viewport.height >= 640
+              ? 300
+              : 220;
+    return Math.max(widthLimit, heightLimit);
+  }, [viewport]);
+
+  const visibleBars = useMemo(() => {
+    if (viewport.width >= 1680) {
+      return 520;
     }
-    if (viewportWidth >= 1366) {
-      return 480;
+    if (viewport.width >= 1366) {
+      return 380;
     }
-    if (viewportWidth >= 1100) {
-      return 360;
+    if (viewport.width >= 1100) {
+      return 280;
     }
     return 220;
-  }, [viewportWidth]);
+  }, [viewport.width]);
 
   const applyListResult = useCallback((result: ScreenResult) => {
     setScreenResult(result);
@@ -427,7 +459,7 @@ export default function App() {
                 <span>正在加载行情...</span>
               </div>
             ) : (
-              <KlineChart rows={kline} period={period} />
+              <KlineChart rows={kline} period={period} visibleBars={visibleBars} />
             )}
           </div>
 

@@ -41,10 +41,14 @@ function movingAverage(values: number[], period: number): Array<number | null> {
   });
 }
 
-function buildOption(rows: KlineRow[], period: Period) {
+function buildOption(rows: KlineRow[], period: Period, visibleBars: number) {
   const dates = rows.map((row) => formatTime(row.time, period));
   const candles = rows.map((row) => [row.open, row.close, row.low, row.high]);
   const closes = rows.map((row) => row.close);
+  const zoomStart =
+    rows.length > visibleBars
+      ? Number((100 - (visibleBars / rows.length) * 100).toFixed(2))
+      : 0;
   const volumeData = rows.map((row) => ({
     value: row.volume,
     itemStyle: { color: row.close >= row.open ? "#f05c66" : "#2eb98b" },
@@ -108,10 +112,12 @@ function buildOption(rows: KlineRow[], period: Period) {
       },
     ],
     dataZoom: [
-      { type: "inside", xAxisIndex: [0, 1], start: 42, end: 100 },
+      { type: "inside", xAxisIndex: [0, 1], start: zoomStart, end: 100 },
       {
         type: "slider",
         xAxisIndex: [0, 1],
+        start: zoomStart,
+        end: 100,
         bottom: 2,
         height: 18,
         borderColor: "#33413d",
@@ -173,9 +179,10 @@ function buildOption(rows: KlineRow[], period: Period) {
 interface KlineChartProps {
   rows: KlineRow[];
   period: Period;
+  visibleBars: number;
 }
 
-export default function KlineChart({ rows, period }: KlineChartProps) {
+export default function KlineChart({ rows, period, visibleBars }: KlineChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
 
@@ -196,9 +203,11 @@ export default function KlineChart({ rows, period }: KlineChartProps) {
 
   useEffect(() => {
     if (chartRef.current && rows.length > 0) {
-      chartRef.current.setOption(buildOption(rows, period), { notMerge: true });
+      chartRef.current.setOption(buildOption(rows, period, visibleBars), {
+        notMerge: true,
+      });
     }
-  }, [rows, period]);
+  }, [rows, period, visibleBars]);
 
   return (
     <div className="kline-chart" ref={containerRef} aria-label="K线价格趋势图" />
