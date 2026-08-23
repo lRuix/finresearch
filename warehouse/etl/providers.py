@@ -1,8 +1,9 @@
 """Data source response parsing helpers."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import math
+
+from datetime import datetime, timezone
 
 
 def _is_blank(value: object) -> bool:
@@ -13,14 +14,16 @@ def _is_blank(value: object) -> bool:
 
 
 def _to_iso_timestamp(value: object) -> str | None:
-    # Binance open_time is milliseconds (13-digit magnitude) while Gate
-    # timestamp is seconds (10-digit magnitude). Values at or above
-    # 100_000_000_000 are treated as milliseconds, smaller values as seconds.
+    # Binance open_time is in milliseconds (currently ~13-digit magnitude),
+    # while Gate timestamp is in seconds (~10-digit magnitude). The cutoff at
+    # 100_000_000_000 is only a heuristic for the current data sources, not a
+    # general timestamp-unit rule: values at or above it are treated as
+    # milliseconds, smaller values as seconds.
     if value is None or _is_blank(value):
         return None
     try:
         timestamp = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if timestamp < 0 or timestamp > 10_000_000_000_000:
         return None
@@ -49,7 +52,7 @@ def _to_int(value: object) -> int | None:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

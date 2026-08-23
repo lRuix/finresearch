@@ -67,6 +67,10 @@ def test_blank_markers_and_non_finite_floats():
     assert _to_float("inf") is None
     assert _to_float("-inf") is None
     assert _to_float("-") is None
+    assert _to_int(float("inf")) is None
+    assert _to_int(float("-inf")) is None
+    assert _to_iso_timestamp(float("inf")) is None
+    assert _to_iso_timestamp(float("-inf")) is None
 
 
 def test_parse_gate_klines():
