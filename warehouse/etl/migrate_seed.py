@@ -46,7 +46,7 @@ def _split_fx_currency(symbol: Any) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _mapped_sqlite_row(row: sqlite3.Row, batch_id: str) -> dict[str, Any]:
+def _mapped_sqlite_row(row: sqlite3.Row, batch_id: str) -> dict[str, Any] | None:
     """Map one legacy kline row to the shared ODS shape."""
     market = row["market"]
     mapped: dict[str, Any] = {
@@ -68,8 +68,10 @@ def _mapped_sqlite_row(row: sqlite3.Row, batch_id: str) -> dict[str, Any]:
         base_currency, quote_currency = _split_fx_currency(row["symbol"])
         if base_currency is None or quote_currency is None:
             logger.warning(
-                "Cannot parse FX symbol %s into a currency pair", row["symbol"]
+                "Skipping FX kline symbol=%s: cannot parse currency pair",
+                row["symbol"],
             )
+            return None
         mapped.update(
             {
                 "base_currency": base_currency,
@@ -98,7 +100,9 @@ def iter_sqlite_klines(
             """
         )
         for row in cursor:
-            yield _mapped_sqlite_row(row, batch_id)
+            mapped = _mapped_sqlite_row(row, batch_id)
+            if mapped is not None:
+                yield mapped
 
 
 def migrate_klines(
