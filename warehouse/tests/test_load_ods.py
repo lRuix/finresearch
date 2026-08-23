@@ -391,3 +391,23 @@ def test_batch_rolls_back_when_later_row_fails(dsn, cleanup_ods_rows):
                 ),
             )
             assert cur.fetchone()[0] == 0
+
+
+def test_upsert_in_multiple_batches(dsn, cleanup_ods_rows):
+    rows = [
+        _a_share_row(f"TEST-BATCH-{index}", close=float(index))
+        for index in range(5)
+    ]
+
+    upsert_ods_rows(dsn, "a-share", rows, batch_size=2)
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*)
+            FROM ods_klines_a_share
+            WHERE provider = %s AND sync_batch_id = %s
+            """,
+            (rows[0]["provider"], BATCH_ID),
+        )
+        assert cur.fetchone()[0] == 5

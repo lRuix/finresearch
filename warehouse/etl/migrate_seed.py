@@ -1,9 +1,9 @@
 """Initial warehouse migration and news seeding."""
 from __future__ import annotations
 
-from collections import defaultdict
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+import logging
 import os
 from pathlib import Path
 import sqlite3
@@ -31,12 +31,22 @@ DEFAULT_DB_PATH = ROOT / "backend" / "data" / "research.db"
 MARKETS = tuple(MARKET_TABLES)
 
 _CN_TIMEZONE = timezone(timedelta(hours=8))
-_BATCH_ID = f"seed-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%f}-{uuid.uuid4().hex[:8]}"
-
-# RSS 暂不默认抓取：外部网络不稳定，后续可在 load_news 中合并 fetch_rss_news 的结果。
+logger = logging.getLogger(__name__)
 
 
-def _mapped_sqlite_row(row: sqlite3.Row) -> dict[str, Any]:
+def _new_batch_id() -> str:
+    return f"seed-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%f}-{uuid.uuid4().hex[:8]}"
+
+
+def _split_fx_currency(symbol: Any) -> tuple[str | None, str | None]:
+    """Parse FX symbols like EURUSD=X or EUR/USD into a currency pair."""
+    text = str(symbol).strip().upper().replace("/", "").replace("=X", "")
+    if len(text) == 6 and text.isalpha():
+        return text[:3], text[3:]
+    return None, None
+
+
+def _mapped_sqlite_row(row: sqlite3.Row, batch_id: str) -> dict[str, Any]:
     """Map one legacy kline row to the shared ODS shape."""
     market = row["market"]
     mapped: dict[str, Any] = {
@@ -51,14 +61,15 @@ def _mapped_sqlite_row(row: sqlite3.Row) -> dict[str, Any]:
         "close": row["close"],
         "volume": row["volume"],
         "raw_payload": {},
-        "sync_batch_id": _BATCH_ID,
+        "sync_batch_id": batch_id,
     }
     if market == "fx":
         # ODS FX 表使用 rate 字段；沿用 SQLite 的 OHLCV 数值即可兼容现有 DWD 装载。
+        base_currency, quote_currency = _split_fx_currency(row["symbol"])
         mapped.update(
             {
-                "base_currency": row["symbol"][:3],
-                "quote_currency": row["symbol"][3:6],
+                "base_currency": base_currency,
+                "quote_currency": quote_currency,
                 "open_rate": row["open"],
                 "high_rate": row["high"],
                 "low_rate": row["low"],
@@ -69,7 +80,9 @@ def _mapped_sqlite_row(row: sqlite3.Row) -> dict[str, Any]:
     return mapped
 
 
-def iter_sqlite_klines(db_path: Path | str) -> Iterator[dict[str, Any]]:
+def iter_sqlite_klines(
+    db_path: Path | str, batch_id: str
+) -> Iterator[dict[str, Any]]:
     """Yield legacy SQLite klines as ODS rows."""
     with closing(sqlite3.connect(str(db_path))) as conn:
         conn.row_factory = sqlite3.Row
@@ -81,36 +94,79 @@ def iter_sqlite_klines(db_path: Path | str) -> Iterator[dict[str, Any]]:
             """
         )
         for row in cursor:
-            yield _mapped_sqlite_row(row)
+            yield _mapped_sqlite_row(row, batch_id)
 
 
-def migrate_klines(dsn: str, db_path: Path | str) -> dict[str, dict[str, int]]:
-    """Load SQLite klines into ODS/DWD and return per-market row counts."""
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in iter_sqlite_klines(db_path):
-        grouped[row["market"]].append(row)
+def migrate_klines(
+    dsn: str,
+    db_path: Path | str,
+    batch_id: str | None = None,
+    ods_batch_size: int = 1000,
+) -> dict[str, dict[str, int]]:
+    """Stream SQLite klines into ODS/DWD and return per-market row counts."""
+    batch_id = batch_id or _new_batch_id()
+    stats = {market: {"ods": 0, "dwd": 0} for market in MARKETS}
 
-    stats: dict[str, dict[str, int]] = {}
-    for market in MARKETS:
-        rows = grouped.get(market, [])
-        if not rows:
-            stats[market] = {"ods": 0, "dwd": 0}
+    current_market: str | None = None
+    current_count = 0
+    chunk: list[dict[str, Any]] = []
+
+    def flush_ods() -> None:
+        nonlocal chunk, current_count
+        if chunk:
+            upsert_ods_rows(dsn, current_market, chunk, batch_size=ods_batch_size)
+            current_count += len(chunk)
+            chunk = []
+
+    def close_market() -> None:
+        nonlocal current_count
+        if current_market is None:
+            return
+        flush_ods()
+        stats[current_market]["ods"] = current_count
+        stats[current_market]["dwd"] = build_dwd(dsn, current_market)
+        current_count = 0
+
+    for row in iter_sqlite_klines(db_path, batch_id):
+        market = row["market"]
+        if market not in MARKET_TABLES:
+            logger.warning("Skipping klines from unknown market: %s", market)
             continue
+        if current_market is None:
+            current_market = market
+        elif market != current_market:
+            close_market()
+            current_market = market
 
-        upsert_ods_rows(dsn, market, rows)
-        dwd_count = build_dwd(dsn, market)
-        stats[market] = {"ods": len(rows), "dwd": dwd_count}
+        chunk.append(row)
+        if len(chunk) >= ods_batch_size:
+            flush_ods()
+
+    close_market()
     return stats
 
 
 def _parse_news_time(value: str) -> datetime:
+    if str(value).strip().upper() == "RSS":
+        return datetime.now(_CN_TIMEZONE)
     parsed = datetime.strptime(value, "%m-%d %H:%M")
-    return parsed.replace(year=datetime.now(_CN_TIMEZONE).year, tzinfo=_CN_TIMEZONE)
+    now = datetime.now(_CN_TIMEZONE)
+    parsed = parsed.replace(year=now.year, tzinfo=_CN_TIMEZONE)
+    if parsed > now + timedelta(days=7):
+        parsed = parsed.replace(year=now.year - 1)
+    return parsed
 
 
-def _news_params() -> list[tuple[Any, ...]]:
+def _news_items(include_rss: bool) -> list[dict[str, Any]]:
+    items = list(macro_data.NEWS_ITEMS)
+    if include_rss:
+        items.extend(macro_data.fetch_rss_news())
+    return items
+
+
+def _news_params(items: list[dict[str, Any]], batch_id: str) -> list[tuple[Any, ...]]:
     params: list[tuple[Any, ...]] = []
-    for item in macro_data.NEWS_ITEMS:
+    for item in items:
         published_at = _parse_news_time(item["time"])
         params.append(
             (
@@ -123,15 +179,18 @@ def _news_params() -> list[tuple[Any, ...]]:
                 item["sentiment"],
                 published_at,
                 Jsonb({}),
-                _BATCH_ID,
+                batch_id,
             )
         )
     return params
 
 
-def load_news(dsn: str) -> int:
+def load_news(
+    dsn: str, batch_id: str | None = None, include_rss: bool = False
+) -> int:
     """Load cached macro news into ODS and fact_news."""
-    news_params = _news_params()
+    batch_id = batch_id or _new_batch_id()
+    news_params = _news_params(_news_items(include_rss), batch_id)
     if not news_params:
         return 0
 
@@ -189,9 +248,15 @@ def _print_stats(
 def main() -> None:
     dsn = os.environ.get("WAREHOUSE_DSN", DEFAULT_DSN)
     db_path = Path(os.environ.get("WAREHOUSE_DB_PATH", str(DEFAULT_DB_PATH)))
+    include_rss = os.environ.get("WAREHOUSE_LIVE_NEWS", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    batch_id = _new_batch_id()
 
-    kline_stats = migrate_klines(dsn, db_path)
-    news_count = load_news(dsn)
+    kline_stats = migrate_klines(dsn, db_path, batch_id=batch_id)
+    news_count = load_news(dsn, batch_id=batch_id, include_rss=include_rss)
     refresh_dws(dsn)
 
     _print_stats(kline_stats, news_count)

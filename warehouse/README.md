@@ -2,6 +2,19 @@
 
 数仓子项目，用于把本地市场数据抽取到 PostgreSQL，并构建 ODS、DWD、DWS 分层数据。
 
+## 准备运行环境
+
+以下命令默认在 `warehouse/` 目录内执行：
+
+```bash
+cd warehouse
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+也可以复用项目已有的 `backend/.venv`，只要其中已安装 `psycopg` 与 `pytest`。
+
 ## 启动 PostgreSQL
 
 ```bash
@@ -23,6 +36,7 @@ psql "$WAREHOUSE_DSN" -f models/04_dws.sql
 ## 运行初始迁移
 
 ```bash
+cd warehouse
 python -m etl.migrate_seed
 ```
 
@@ -33,9 +47,16 @@ python -m etl.migrate_seed
 WAREHOUSE_DSN="$WAREHOUSE_DSN" WAREHOUSE_DB_PATH="/path/to/research.db" python -m etl.migrate_seed
 ```
 
+新闻默认只装载 `macro_data.NEWS_ITEMS` 缓存；需要额外抓取 RSS 时设置：
+
+```bash
+WAREHOUSE_LIVE_NEWS=1 python -m etl.migrate_seed
+```
+
 ## 运行测试
 
 ```bash
+cd warehouse
 python -m pytest tests -q
 ```
 

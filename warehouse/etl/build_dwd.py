@@ -174,108 +174,123 @@ def _map_ohlc(
     return open_, high, low, close
 
 
+def _priority_order_sql() -> tuple[str, list[Any]]:
+    """Build a CASE expression ordering ODS rows by provider priority."""
+    clauses = " ".join("WHEN %s THEN %s" for _ in PROVIDER_PRIORITY)
+    params = [value for pair in PROVIDER_PRIORITY.items() for value in pair]
+    return f"CASE provider {clauses} ELSE 50 END", params
+
+
 def build_dwd(dsn: str, market: str) -> int:
     """Load one market's ODS klines into the normalized fact table."""
     table = MARKET_TABLES.get(market)
     if table is None:
         raise ValueError(f"unknown market: {market}")
 
-    with connect(dsn) as conn, conn.cursor(row_factory=dict_row) as cur:
-        # 先按原始键取一个稳定读取顺序；主源优先级在 Python 中统一排序。
-        cur.execute(f"SELECT * FROM {table} ORDER BY provider, symbol, interval, ts")
-        ods_rows = cur.fetchall()
-        if not ods_rows:
-            return 0
+    priority_sql, priority_params = _priority_order_sql()
+    select_sql = (
+        f"SELECT * FROM {table} "
+        f"ORDER BY {priority_sql}, provider, symbol, interval, ts"
+    )
 
-        # 同一 (symbol, normalized period, UTC time) 可能来自多个 provider。
-        # 低优先级先写入、高优先级后写入；ON CONFLICT 会覆盖之前的值，
-        # 因此 fact_kline.provider_id 与 OHLC 值来自最终胜出的主源 provider。
-        prepared_rows: list[tuple[Any, dict[str, Any], str, datetime]] = []
-        for row in ods_rows:
-            try:
-                time = _parse_time(row["ts"])
-            except (TypeError, ValueError):
-                logger.warning(
-                    "Skipping %s kline symbol=%s ts=%s: invalid timestamp",
-                    market,
-                    row.get("symbol"),
-                    row.get("ts"),
-                )
-                continue
+    with connect(dsn) as conn:
+        # Server-side cursor 按批拉取，避免 5 万行 ODS 一次性驻留内存。
+        with conn.cursor(name="dwd_build", row_factory=dict_row) as read_cur:
+            read_cur.itersize = 1000
+            read_cur.execute(select_sql, priority_params)
+            write_cur = conn.cursor(row_factory=dict_row)
 
-            period = _normalize_period(row["interval"])
-            priority = PROVIDER_PRIORITY.get(row["provider"], _UNKNOWN_PROVIDER_PRIORITY)
-            prepared_rows.append(
-                (
-                    (priority, row["provider"], row["symbol"], period, time),
-                    row,
-                    period,
-                    time,
-                )
-            )
-        prepared_rows.sort(key=lambda item: item[0])
+            instrument_ids: dict[tuple[str, str], int] = {}
+            providers: set[str] = set()
+            dates: set[date] = set()
+            affected = 0
 
-        _ensure_market(cur, market)
-        affected = 0
-        for _, row, period, time in prepared_rows:
-            open_, high, low, close = _map_ohlc(row, market)
-            if any(value is None for value in (open_, high, low, close)):
-                logger.warning(
-                    "Skipping %s kline symbol=%s ts=%s: missing required OHLC values",
-                    market,
-                    row.get("symbol"),
-                    row.get("ts"),
-                )
-                continue
+            while rows := read_cur.fetchmany(1000):
+                if affected == 0:
+                    _ensure_market(write_cur, market)
 
-            # date_key 取 time 的 UTC 自然日。
-            date_key = time.astimezone(timezone.utc).date()
+                # 同一 (symbol, normalized period, UTC time) 可能来自多个 provider。
+                # 低优先级先写入、高优先级后写入；ON CONFLICT 会覆盖之前的值，
+                # 因此 fact_kline.provider_id 与 OHLC 值来自最终胜出的主源 provider。
+                for row in rows:
+                    try:
+                        time = _parse_time(row["ts"])
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "Skipping %s kline symbol=%s ts=%s: invalid timestamp",
+                            market,
+                            row.get("symbol"),
+                            row.get("ts"),
+                        )
+                        continue
 
-            provider_id = row["provider"]
-            symbol = row["symbol"]
-            instrument_id = _ensure_instrument(cur, market, symbol)
-            _ensure_provider(cur, provider_id)
-            _ensure_date(cur, date_key)
+                    period = _normalize_period(row["interval"])
+                    open_, high, low, close = _map_ohlc(row, market)
+                    if any(value is None for value in (open_, high, low, close)):
+                        logger.warning(
+                            "Skipping %s kline symbol=%s ts=%s: missing required OHLC values",
+                            market,
+                            row.get("symbol"),
+                            row.get("ts"),
+                        )
+                        continue
 
-            if market == "fx":
-                volume = 0.0
-            else:
-                volume = row.get("volume")
-                if volume is None:
-                    volume = 0.0
+                    # date_key 取 time 的 UTC 自然日。
+                    date_key = time.astimezone(timezone.utc).date()
 
-            cur.execute(
-                """
-                INSERT INTO fact_kline (
-                  market_id, instrument_id, provider_id, date_key,
-                  period, time, open, high, low, close, volume
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (market_id, instrument_id, period, time)
-                DO UPDATE SET
-                  provider_id = EXCLUDED.provider_id,
-                  date_key = EXCLUDED.date_key,
-                  open = EXCLUDED.open,
-                  high = EXCLUDED.high,
-                  low = EXCLUDED.low,
-                  close = EXCLUDED.close,
-                  volume = EXCLUDED.volume
-                """,
-                (
-                    market,
-                    instrument_id,
-                    provider_id,
-                    date_key,
-                    period,
-                    time,
-                    open_,
-                    high,
-                    low,
-                    close,
-                    volume,
-                ),
-            )
-            affected += cur.rowcount
+                    provider_id = row["provider"]
+                    symbol = row["symbol"]
+                    key = (market, symbol)
+                    instrument_id = instrument_ids.get(key)
+                    if instrument_id is None:
+                        instrument_id = _ensure_instrument(write_cur, market, symbol)
+                        instrument_ids[key] = instrument_id
+                    if provider_id not in providers:
+                        _ensure_provider(write_cur, provider_id)
+                        providers.add(provider_id)
+                    if date_key not in dates:
+                        _ensure_date(write_cur, date_key)
+                        dates.add(date_key)
 
-        conn.commit()
-        return affected
+                    if market == "fx":
+                        volume = 0.0
+                    else:
+                        volume = row.get("volume")
+                        if volume is None:
+                            volume = 0.0
+
+                    write_cur.execute(
+                        """
+                        INSERT INTO fact_kline (
+                          market_id, instrument_id, provider_id, date_key,
+                          period, time, open, high, low, close, volume
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (market_id, instrument_id, period, time)
+                        DO UPDATE SET
+                          provider_id = EXCLUDED.provider_id,
+                          date_key = EXCLUDED.date_key,
+                          open = EXCLUDED.open,
+                          high = EXCLUDED.high,
+                          low = EXCLUDED.low,
+                          close = EXCLUDED.close,
+                          volume = EXCLUDED.volume
+                        """,
+                        (
+                            market,
+                            instrument_id,
+                            provider_id,
+                            date_key,
+                            period,
+                            time,
+                            open_,
+                            high,
+                            low,
+                            close,
+                            volume,
+                        ),
+                    )
+                    affected += write_cur.rowcount
+
+            conn.commit()
+            return affected
