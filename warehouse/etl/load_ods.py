@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import psycopg
 from psycopg.types.json import Jsonb
+
+from etl.db import connect
 
 
 MARKET_TABLES = {
@@ -134,7 +135,7 @@ def _row_params(row: dict[str, Any], columns: tuple[str, ...]) -> tuple[Any, ...
     return tuple(params)
 
 
-def upsert_ods_rows(dsn: str, market: str, rows: list[dict]) -> None:
+def upsert_ods_rows(dsn: str, market: str, rows: list[dict[str, Any]]) -> None:
     """Insert ODS klines, updating conflicting rows in one transaction."""
     table = MARKET_TABLES.get(market)
     if table is None:
@@ -155,6 +156,6 @@ def upsert_ods_rows(dsn: str, market: str, rows: list[dict]) -> None:
     )
 
     params = [_row_params({**row, "market": market}, columns) for row in rows]
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+    with connect(dsn) as conn, conn.cursor() as cur:
         cur.executemany(sql, params)
         conn.commit()
