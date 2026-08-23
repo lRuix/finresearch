@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from unittest.mock import patch
 import uuid
@@ -32,6 +32,8 @@ def dws_cleanup(dsn):
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT provider_id FROM dim_provider")
         before_providers = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT market_id FROM dim_market")
+        before_markets = {row[0] for row in cur.fetchall()}
         cur.execute("SELECT date_key FROM dim_date")
         before_dates = {row[0] for row in cur.fetchall()}
         cur.execute("SELECT market_id, symbol FROM dim_instrument")
@@ -47,16 +49,10 @@ def dws_cleanup(dsn):
         test_dates: set[date] = set()
         for market, table in MARKET_TABLES.items():
             cur.execute(
-                f"SELECT symbol, ts FROM {table} WHERE sync_batch_id = %s",
+                f"SELECT symbol FROM {table} WHERE sync_batch_id = %s",
                 (batch_id,),
             )
-            rows = cur.fetchall()
-            market_symbols[market] = [row[0] for row in rows]
-            for row in rows:
-                try:
-                    test_dates.add(date.fromisoformat(row[1][:10]))
-                except (TypeError, ValueError):
-                    pass
+            market_symbols[market] = [row[0] for row in cur.fetchall()]
             cur.execute(
                 f"DELETE FROM {table} WHERE sync_batch_id = %s",
                 (batch_id,),
@@ -66,6 +62,22 @@ def dws_cleanup(dsn):
         for market, symbols in market_symbols.items():
             if not symbols:
                 continue
+
+            cur.execute(
+                """
+                SELECT DISTINCT date_key
+                FROM fact_kline
+                WHERE market_id = %s
+                  AND provider_id = ANY(%s)
+                  AND instrument_id IN (
+                      SELECT instrument_id
+                      FROM dim_instrument
+                      WHERE market_id = %s AND symbol = ANY(%s)
+                  )
+                """,
+                (market, providers, market, symbols),
+            )
+            test_dates.update(row[0] for row in cur.fetchall())
 
             cur.execute(
                 """
@@ -131,6 +143,18 @@ def dws_cleanup(dsn):
                 """,
                 (sorted(test_dates), sorted(before_dates)),
             )
+        test_markets = {
+            market for market, symbols in market_symbols.items() if symbols
+        }
+        if test_markets:
+            cur.execute(
+                """
+                DELETE FROM dim_market
+                WHERE market_id = ANY(%s)
+                  AND market_id != ALL(%s)
+                """,
+                (sorted(test_markets), sorted(before_markets)),
+            )
         conn.commit()
 
     refresh_dws(dsn)
@@ -141,7 +165,7 @@ def _unique_symbol(prefix: str) -> str:
 
 
 def _unique_date() -> date:
-    return date(2099, 1, (uuid.uuid4().int % 27) + 1)
+    return date(2099, 1, 1) + timedelta(days=uuid.uuid4().int % 365)
 
 
 def _a_share_row(
