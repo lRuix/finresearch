@@ -4,25 +4,45 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 
+def _is_blank(value: object) -> bool:
+    if isinstance(value, str):
+        return not value.strip() or value.strip().lower() == "none"
+    return False
+
+
 def _to_iso_timestamp(value: object) -> str | None:
-    if value is None:
+    if value is None or _is_blank(value):
         return None
-    timestamp = int(value)
-    if timestamp >= 1_000_000_000_000:
+    try:
+        timestamp = int(value)
+    except (TypeError, ValueError):
+        return None
+    if timestamp < 0 or timestamp > 10_000_000_000_000:
+        return None
+    if timestamp >= 100_000_000_000:
         timestamp /= 1000
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+    try:
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def _to_float(value: object) -> float | None:
-    if value is None:
+    if value is None or _is_blank(value):
         return None
-    return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _to_int(value: object) -> int | None:
-    if value is None:
+    if value is None or _is_blank(value):
         return None
-    return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _to_str(value: object) -> str | None:
