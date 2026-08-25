@@ -157,12 +157,16 @@ def sync_akshare(conn: Any, batch_id: str) -> dict[str, Any]:
 
 def sync_external(dsn: str, batch_id: str | None = None) -> dict[str, Any]:
     batch_id = batch_id or _new_batch_id()
-    return {
+    stats = {
         "coingecko": _run_source(dsn, batch_id, sync_coingecko),
         "sec": _run_source(dsn, batch_id, sync_sec),
         "worldbank": _run_source(dsn, batch_id, sync_worldbank),
         "akshare": _run_source(dsn, batch_id, sync_akshare),
     }
+    with connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("REFRESH MATERIALIZED VIEW dws_indicator_daily")
+        conn.commit()
+    return stats
 
 
 def main() -> None:

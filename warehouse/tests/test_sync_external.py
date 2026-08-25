@@ -102,6 +102,26 @@ def test_sync_external_failed_source_does_not_block_others(
     assert stats["worldbank"]["status"] == "error"
 
 
+def test_sync_external_refreshes_indicator_dws(dsn, cleanup_external_sync, monkeypatch):
+    from etl.sources import coingecko, worldbank, akshare_cn, sec_edgar
+
+    monkeypatch.setattr(coingecko, "fetch_markets", _fake_markets)
+    monkeypatch.setattr(worldbank, "fetch_indicator", lambda _c, _i: [])
+    monkeypatch.setattr(akshare_cn, "fetch_financials", lambda _s: [])
+    monkeypatch.setattr(akshare_cn, "fetch_lhb", lambda _a, _b: [])
+
+    def _no_sec(_cik):
+        return {"cik": _cik, "facts": {}}
+
+    monkeypatch.setattr(sec_edgar, "fetch_submissions", lambda _cik: {"cik": _cik, "name": "X", "tickers": [], "exchanges": []})
+    monkeypatch.setattr(sec_edgar, "fetch_company_facts", _no_sec)
+
+    sync_external(dsn, batch_id=f"test-extsync-{uuid.uuid4()}")
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM dws_indicator_daily")
+        assert cur.fetchone()[0] == 3
+
+
 def test_get_watermark_missing_scope_returns_none(dsn):
     with psycopg.connect(dsn) as conn:
         assert get_watermark(conn, "coingecko:coin:does-not-exist") is None
