@@ -12,4 +12,4 @@ import pytest
 
 @pytest.fixture(scope="session")
 def dsn():
-    return "postgresql://warehouse:warehouse@127.0.0.1:5432/warehouse"
+    return "postgresql://warehouse:warehouse@127.0.0.1:5432/warehouse_test"
