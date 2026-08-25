@@ -178,7 +178,8 @@ sequenceDiagram
 | `datasources/provider_datasource.py` | 把 provider 实现适配成 `MarketDataSource` 端口 |
 | `datasources/provider_impl.py` | 真实源路由、熔断、内存缓存、确定性模拟兜底、全市场候选发现 |
 | `datasources/macro_provider.py` / `macro_data.py` | 宏观快照、新闻与市场偏置 |
-| `repository/sqlite.py` | SQLite 仓库：`instruments` / `klines` / `market_snapshots` / `evaluations` / `sync_watermarks`；应用当前写入 K 线、推荐结果与同步水位线，`instruments` / `market_snapshots` 表结构就绪 |
+| `repository/postgres.py` | 数仓 PostgreSQL 仓库：读 `fact_kline` 行情，读写 `backend_evaluations` / `backend_market_snapshots`；`WAREHOUSE_DSN` 设置时启用，backend 不再运行时同步 |
+| `repository/sqlite.py` | 默认本地仓库：`instruments` / `klines` / `market_snapshots` / `evaluations` / `sync_watermarks`（未配置数仓时使用） |
 
 ### 顶层装配根 — `backend/app.py`
 
@@ -245,7 +246,7 @@ CREATE TABLE sync_watermarks (
 
 ## 数仓（warehouse/）
 
-独立 OLAP 数仓子项目，纯 PostgreSQL 16（Docker Compose 启动），与业务应用解耦；业务 API 暂不消费数仓，先完成数据采集、建模、装载与质量校验。
+独立 OLAP 数仓子项目，纯 PostgreSQL 16（Docker Compose 启动）。backend 通过 `WAREHOUSE_DSN` 切换后直接消费数仓（读 `fact_kline`、写 `backend_evaluations` 等）；未配置时业务 API 仍走 SQLite。
 
 - **ODS 贴源层**：按市场分表（`ods_klines_a_share / fund / us / kr / hk / fx / crypto` + `ods_news`），保留 `raw_payload`，以幂等键去重。
 - **DWD 明细层**：`dim_date / dim_market / dim_instrument / dim_provider` + `fact_kline`（按 `time` 范围分区）/ `fact_news`；多 provider 按优先级取主源。
