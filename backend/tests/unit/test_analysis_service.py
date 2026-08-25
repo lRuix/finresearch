@@ -12,10 +12,9 @@ def _rows(count: int = 60):
     ]
 
 
-def _service(repo=None, sync=None, resolver=None, macro=None, fx=None):
+def _service(repo=None, resolver=None, macro=None, fx=None):
     return AnalysisService(
         repo or MagicMock(),
-        sync or MagicMock(),
         resolver or MagicMock(),
         macro or MagicMock(),
         fx,
@@ -63,38 +62,20 @@ def test_kline_sources_local_and_live():
     assert len(items) == 30
     assert "close" in items[0]
 
-    repo2 = MagicMock()
-    repo2.get_klines.side_effect = [[], _rows()]
-    sync = MagicMock()
-    sync.sync.return_value = (_rows(), "live")
-    _, source2 = _service(repo=repo2, sync=sync).kline("us", "AAPL", "d", 30)
-    assert source2 == "live"
-
-
-def test_kline_forwards_prefer_real():
+def test_kline_returns_existing_data_when_short():
     repo = MagicMock()
-    repo.get_klines.side_effect = [[], _rows()]
-    sync = MagicMock()
-    sync.sync.return_value = (_rows(), "mock")
-    service = _service(repo=repo, sync=sync)
-    _, source = service.kline("us", "AAPL", "d", 30, prefer_real=False)
-    assert source == "mock"
-    assert sync.sync.call_args.kwargs["prefer_real"] is False
-
-
-def test_kline_backfills_local_history_when_short():
-    repo = MagicMock()
-    repo.get_klines.side_effect = [_rows(30), _rows(80)]
-    sync = MagicMock()
-    sync.sync.return_value = (_rows(), "live")
-    service = _service(repo=repo, sync=sync)
-
-    items, source = service.kline("us", "AAPL", "d", 60)
-
+    repo.get_klines.return_value = _rows(30)
+    items, source = _service(repo=repo).kline("us", "AAPL", "d", 60)
     assert source == "local"
-    assert len(items) == 60
-    sync.sync.assert_called_once()
-    assert sync.sync.call_args.kwargs["force_full"] is True
+    assert len(items) == 30  # 缺数据不补齐，返回已有
+
+
+def test_kline_returns_empty_when_no_data():
+    repo = MagicMock()
+    repo.get_klines.return_value = []
+    items, source = _service(repo=repo).kline("us", "AAPL", "d", 30)
+    assert items == []
+    assert source == "local"
 
 
 def test_recommend_uses_market_news_sentiment_and_shape():
@@ -119,12 +100,10 @@ def test_recommend_uses_market_news_sentiment_and_shape():
     assert result["sentiment"]["polarity"] == 0.3
 
 
-def test_ensure_klines_triggers_sync_when_short():
+def test_ensure_klines_returns_existing_data_without_sync():
     repo = MagicMock()
-    repo.get_klines.side_effect = [_rows(29), _rows(60)]
-    sync = MagicMock()
-    sync.sync.return_value = (_rows(), "live")
-    service = _service(repo=repo, sync=sync)
+    repo.get_klines.return_value = _rows(29)
+    service = _service(repo=repo)
     rows = service._ensure_klines("us", "AAPL", "d")
-    assert len(rows) == 60
-    assert sync.sync.called
+    assert len(rows) == 29
+    repo.get_klines.assert_called_once()

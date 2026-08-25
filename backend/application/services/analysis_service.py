@@ -6,7 +6,6 @@ from application.ports import (
     MacroNewsProvider,
     MarketDataRepository,
 )
-from application.services.sync_service import SyncService
 from application.services.symbol_resolver import SymbolResolver
 from domain.indicators import analyze
 
@@ -20,12 +19,10 @@ def _kline_dict(row) -> dict:
 
 class AnalysisService:
     def __init__(self, repository: MarketDataRepository,
-                 sync_service: SyncService,
                  symbol_resolver: SymbolResolver,
                  macro_news: MacroNewsProvider,
                  fx_provider: FxRateProvider | None = None):
         self._repository = repository
-        self._sync = sync_service
         self._resolver = symbol_resolver
         self._macro = macro_news
         self._fx = fx_provider
@@ -33,9 +30,6 @@ class AnalysisService:
     def _ensure_klines(self, market: str, symbol: str, period: str,
                        prefer_real: bool = True) -> list:
         rows = self._repository.get_klines(market, symbol, period)
-        if not rows or len(rows) < 30:
-            self._sync.sync(market, symbol, period, prefer_real=prefer_real)
-            rows = self._repository.get_klines(market, symbol, period)
         return rows
 
     def analyze(self, market: str, symbol: str) -> dict:
@@ -58,24 +52,9 @@ class AnalysisService:
 
     def kline(self, market: str, symbol: str, period: str,
               limit: int, prefer_real: bool = True) -> tuple[list[dict], str]:
-        """Return (items, source). 'local' means served from the local repository."""
+        """Return (items, source) served from the warehouse repository."""
         rows = self._repository.get_klines(market, symbol, period)
-        if rows and len(rows) >= limit:
-            return [_kline_dict(row) for row in rows[-limit:]], "local"
-
-        if rows:
-            # 本地历史不足 limit 时强制全量同步补齐，避免宽屏请求更多数据仍只返回旧缓存。
-            self._sync.sync(
-                market, symbol, period, prefer_real=prefer_real, force_full=True,
-            )
-            rows = self._repository.get_klines(market, symbol, period)
-            if rows:
-                return [_kline_dict(row) for row in rows[-limit:]], "local"
-            return [], "mock"
-
-        _, source = self._sync.sync(market, symbol, period, prefer_real=prefer_real)
-        rows = self._repository.get_klines(market, symbol, period)
-        return [_kline_dict(row) for row in rows[-limit:]], source if rows else "mock"
+        return [_kline_dict(row) for row in rows[-limit:]], "local"
 
     def _market_sentiment(self, market: str) -> float:
         scores = [item.get("sentiment") for item in self._macro.news_items(market)]

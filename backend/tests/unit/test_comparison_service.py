@@ -31,7 +31,7 @@ def _recovering():
 
 
 def test_compare_sorts_by_calmar_descending_none_last():
-    service = ComparisonService(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    service = ComparisonService(MagicMock(), MagicMock(), MagicMock())
     results = service._compare_assets([
         {"symbol": "RISE", "name": "R", "market": "us", "currency": "USD",
          "rmb_closes": _rising()},
@@ -55,7 +55,7 @@ def test_compare_injects_fx_by_currency():
     resolver.currency_for.side_effect = {"us": "USD", "a-share": "CNY"}.get
     fx = MagicMock()
     fx.reference_fx_rate.side_effect = {"USD": 7.18, "CNY": 1.0}.get
-    service = ComparisonService(repo, MagicMock(), resolver, fx)
+    service = ComparisonService(repo, resolver, fx)
     result = service.compare("AAPL,600519")
     assert result["total"] == 2
     assert fx.reference_fx_rate.call_args_list == [call("USD"), call("CNY")]
@@ -64,33 +64,28 @@ def test_compare_injects_fx_by_currency():
 def test_compare_skips_unknown_and_no_data():
     repo = MagicMock()
     repo.get_klines.return_value = []
-    sync = MagicMock()
-    sync.sync.return_value = ([], "mock")
     resolver = MagicMock()
     resolver.detect_market.side_effect = {"AAPL": "us"}.get
-    service = ComparisonService(repo, sync, resolver, MagicMock())
+    service = ComparisonService(repo, resolver, MagicMock())
     result = service.compare("AAPL,ZZZZ")
     assert result == {"items": [], "total": 0}
-    assert sync.sync.called
 
 
 def test_compare_empty_symbols():
-    service = ComparisonService(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    service = ComparisonService(MagicMock(), MagicMock(), MagicMock())
     assert service.compare("") == {"items": [], "total": 0}
 
 
-def test_compare_triggers_sync_when_short():
+def test_compare_uses_short_data_without_sync():
     repo = MagicMock()
-    repo.get_klines.side_effect = [_rows(29), _rows(60)]
-    sync = MagicMock()
-    sync.sync.return_value = (_rows(), "live")
+    repo.get_klines.return_value = _rows(29)
     resolver = MagicMock()
     resolver.detect_market.return_value = "us"
     resolver.normalize_symbol.return_value = "AAPL"
     resolver.currency_for.return_value = "USD"
     fx = MagicMock()
     fx.reference_fx_rate.return_value = 7.18
-    service = ComparisonService(repo, sync, resolver, fx)
+    service = ComparisonService(repo, resolver, fx)
     result = service.compare("AAPL")
     assert result["total"] == 1
-    assert sync.sync.called
+    repo.get_klines.assert_called_once()

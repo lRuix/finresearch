@@ -22,10 +22,9 @@ def _candidate(symbol: str, base_risk: float = 0.3):
     }
 
 
-def _service(repo=None, sync=None, macro=None, datasource=None, candidates=None):
+def _service(repo=None, macro=None, datasource=None, candidates=None):
     return ScreeningService(
         repo or MagicMock(),
-        sync or MagicMock(),
         macro or MagicMock(),
         datasource or MagicMock(),
         candidates,

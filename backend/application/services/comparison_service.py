@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from application.ports import FxRateProvider, MarketDataRepository
-from application.services.sync_service import SyncService
 from application.services.symbol_resolver import SymbolResolver
 from domain.valuation import currency as currency_util
 from domain.valuation.constraints import quota_note, requires_quota
@@ -13,11 +12,9 @@ from domain.valuation.metrics import (
 
 class ComparisonService:
     def __init__(self, repository: MarketDataRepository,
-                 sync_service: SyncService,
                  symbol_resolver: SymbolResolver,
                  fx_provider: FxRateProvider):
         self._repository = repository
-        self._sync = sync_service
         self._resolver = symbol_resolver
         self._fx = fx_provider
 
@@ -30,9 +27,6 @@ class ComparisonService:
                 continue
             symbol = self._resolver.normalize_symbol(market, token)
             rows = self._repository.get_klines(market, symbol, "d")
-            if not rows or len(rows) < 30:
-                self._sync.sync(market, symbol, "d")
-                rows = self._repository.get_klines(market, symbol, "d")
             if not rows:
                 continue
             currency = self._resolver.currency_for(market)

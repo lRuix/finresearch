@@ -5,19 +5,16 @@ from concurrent.futures import ThreadPoolExecutor
 
 from application.ports import MacroNewsProvider, MarketDataSource, MarketDataRepository
 from application.services.screening_helpers import asset_type, build_reasons, market_name
-from application.services.sync_service import SyncService
 from domain.indicators import analyze
 from domain.universe_data import MARKETS, universe_for
 
 
 class ScreeningService:
     def __init__(self, repository: MarketDataRepository,
-                 sync_service: SyncService,
                  macro_news: MacroNewsProvider,
                  datasource: MarketDataSource,
                  candidates: list[dict] | None = None):
         self._repository = repository
-        self._sync = sync_service
         self._macro = macro_news
         self._datasource = datasource
         self._candidates = candidates
@@ -43,9 +40,6 @@ class ScreeningService:
                          min_trend: float, min_momentum: float,
                          min_rsi: float, max_rsi: float) -> dict | None:
         rows = self._repository.get_klines(item["market"], item["symbol"], "d")
-        if not rows or len(rows) < 30:
-            self._sync.sync(item["market"], item["symbol"], "d")
-            rows = self._repository.get_klines(item["market"], item["symbol"], "d")
         if not rows:
             return None
         kline_dicts = [

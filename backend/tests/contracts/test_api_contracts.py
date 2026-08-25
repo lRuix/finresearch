@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from application.config import AppConfig
 from app import app, build_container
 from domain.models import KlineRow
+from infrastructure.repository.sqlite import SqliteMarketDataRepository
 from presentation.api import routes
 
 
@@ -27,9 +28,15 @@ def wired_container():
     datasource.list_instruments.return_value = []
     datasource.reference_fx_rate.return_value = 7.18
     datasource.get_live_fx_rates.return_value = None
+    config = AppConfig(db_path=Path(tempfile.mkdtemp()) / "test.db")
+    repo = SqliteMarketDataRepository(config.db_path)
+    for symbol in ("AAPL", "NVDA", "MSFT", "TSLA", "600519"):
+        market = "a-share" if symbol == "600519" else "us"
+        repo.upsert_klines(market, symbol, "d", rows)
     routes.container = build_container(
-        AppConfig(db_path=Path(tempfile.mkdtemp()) / "test.db"),
+        config,
         datasource=datasource,
+        repository=repo,
     )
     yield routes.container
     routes.container = build_container(AppConfig(db_path=Path(tempfile.mkdtemp()) / "restore.db"))
