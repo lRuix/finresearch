@@ -2,390 +2,45 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "全球投研终端 — 系统架构",
+    "title": "FinResearch 全球投研终端 — 系统架构",
+    "output": "finresearch-architecture.html",
     "quality_profile": "showcase",
-    "viewBox": [
-      1360,
-      672
-    ]
+    "viewBox": [1390, 830]
   },
   "components": [
-    {
-      "id": "browser",
-      "type": "frontend",
-      "label": "浏览器",
-      "sublabel": "React SPA · Vite · ECharts",
-      "tag": "5173",
-      "pos": [
-        40,
-        300
-      ],
-      "size": [
-        150,
-        76
-      ]
-    },
-    {
-      "id": "fastapi",
-      "type": "backend",
-      "label": "FastAPI 网关",
-      "sublabel": "app.py · CORS",
-      "tag": ":8000",
-      "pos": [
-        260,
-        300
-      ],
-      "size": [
-        150,
-        76
-      ]
-    },
-    {
-      "id": "screener",
-      "type": "backend",
-      "label": "综合筛选",
-      "sublabel": "多因子评分 0-100",
-      "pos": [
-        500,
-        80
-      ],
-      "size": [
-        150,
-        66
-      ]
-    },
-    {
-      "id": "indicators",
-      "type": "backend",
-      "label": "技术指标",
-      "sublabel": "均线/MACD/RSI/布林",
-      "pos": [
-        720,
-        80
-      ],
-      "size": [
-        150,
-        66
-      ]
-    },
-    {
-      "id": "macro",
-      "type": "backend",
-      "label": "宏观模块",
-      "sublabel": "快照/新闻/市场偏置",
-      "pos": [
-        500,
-        240
-      ],
-      "size": [
-        150,
-        66
-      ]
-    },
-    {
-      "id": "universe",
-      "type": "database",
-      "label": "标的池",
-      "sublabel": "7 市场 · 静态定义",
-      "pos": [
-        260,
-        470
-      ],
-      "size": [
-        150,
-        66
-      ]
-    },
-    {
-      "id": "providers",
-      "type": "backend",
-      "label": "数据提供层",
-      "sublabel": "5min 缓存 · 失败熔断",
-      "pos": [
-        820,
-        240
-      ],
-      "size": [
-        150,
-        66
-      ]
-    },
-    {
-      "id": "tencent",
-      "type": "external",
-      "label": "腾讯行情",
-      "sublabel": "A股/美股/港股/ETF",
-      "pos": [
-        1070,
-        40
-      ],
-      "size": [
-        170,
-        64
-      ]
-    },
-    {
-      "id": "naver",
-      "type": "external",
-      "label": "Naver Finance",
-      "sublabel": "韩股",
-      "pos": [
-        1070,
-        155
-      ],
-      "size": [
-        170,
-        64
-      ]
-    },
-    {
-      "id": "gate",
-      "type": "external",
-      "label": "Gate.io / Binance",
-      "sublabel": "数字货币",
-      "pos": [
-        1070,
-        270
-      ],
-      "size": [
-        170,
-        64
-      ]
-    },
-    {
-      "id": "fxfund",
-      "type": "external",
-      "label": "Frankfurter / 东财",
-      "sublabel": "外汇 · 基金净值",
-      "pos": [
-        1070,
-        385
-      ],
-      "size": [
-        170,
-        64
-      ]
-    },
-    {
-      "id": "fallback",
-      "type": "external",
-      "label": "yfinance / akshare / mock",
-      "sublabel": "备用源 · 确定性模拟",
-      "pos": [
-        1070,
-        500
-      ],
-      "size": [
-        170,
-        64
-      ]
-    }
+    { "id": "browser", "type": "frontend", "label": "浏览器", "sublabel": "React · Vite · ECharts", "tag": ":5173", "pos": [20, 200], "size": [190, 76] },
+    { "id": "api", "type": "backend", "label": "FastAPI 网关", "sublabel": "app.py 装配根 · CORS", "tag": ":8000", "pos": [240, 200], "size": [160, 76] },
+    { "id": "application", "type": "backend", "label": "应用层", "sublabel": "services/ · ports.py", "pos": [450, 200], "size": [160, 76] },
+    { "id": "domain", "type": "backend", "label": "领域/算法层", "sublabel": "indicators · algorithms", "pos": [660, 200], "size": [160, 76] },
+    { "id": "infrastructure", "type": "backend", "label": "基础设施层", "sublabel": "datasources · repository", "tag": "5min 缓存 · 120s 熔断", "pos": [870, 200], "size": [170, 76] },
+    { "id": "sources", "type": "external", "label": "外部数据源", "sublabel": "腾讯 · Naver · Gate · Frankfurter 等", "tag": "备用: yfinance/akshare/mock", "pos": [1080, 200], "size": [240, 76] },
+    { "id": "sqlite", "type": "database", "label": "SQLite", "sublabel": "data/research.db", "pos": [870, 380], "size": [170, 70] },
+    { "id": "etl", "type": "backend", "label": "数仓 ETL", "sublabel": "migrate_seed · 四步管线", "pos": [1070, 380], "size": [200, 70] },
+    { "id": "ods", "type": "database", "label": "ODS 贴源层", "sublabel": "按市场分表 · raw_payload", "pos": [1070, 500], "size": [200, 70] },
+    { "id": "dwd", "type": "database", "label": "DWD 明细层", "sublabel": "dim_* · fact_kline · fact_news", "pos": [1070, 600], "size": [200, 70] },
+    { "id": "dws", "type": "database", "label": "DWS 汇总层", "sublabel": "日频物化视图", "pos": [1070, 700], "size": [200, 70] }
   ],
   "boundaries": [
-    {
-      "kind": "region",
-      "label": "浏览器端",
-      "wraps": [
-        "browser"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "backend/ — FastAPI + 业务核心",
-      "wraps": [
-        "fastapi",
-        "screener",
-        "indicators",
-        "macro",
-        "universe",
-        "providers"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "外部数据源",
-      "wraps": [
-        "tencent",
-        "naver",
-        "gate",
-        "fxfund",
-        "fallback"
-      ]
-    }
+    { "kind": "region", "label": "backend/ — FastAPI 分层单体", "wraps": ["api", "application", "domain", "infrastructure", "sqlite"] },
+    { "kind": "region", "label": "外部数据源", "wraps": ["sources"] },
+    { "kind": "region", "label": "warehouse/ — 独立数仓（PostgreSQL 16）", "wraps": ["etl", "ods", "dwd", "dws"] }
   ],
   "connections": [
-    {
-      "id": "browser-api",
-      "from": "browser",
-      "to": "fastapi",
-      "label": "HTTP /api/*",
-      "variant": "emphasis"
-    },
-    {
-      "id": "api-screen",
-      "from": "fastapi",
-      "to": "screener",
-      "label": "筛选/推荐",
-      "fromSide": "right",
-      "toSide": "bottom"
-    },
-    {
-      "id": "api-analyze",
-      "from": "fastapi",
-      "to": "indicators",
-      "label": "分析",
-      "fromSide": "right",
-      "toSide": "bottom",
-      "labelDy": -10
-    },
-    {
-      "id": "api-macro",
-      "from": "fastapi",
-      "to": "macro",
-      "label": "宏观",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "api-universe",
-      "from": "fastapi",
-      "to": "universe",
-      "label": "标的池",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 40
-    },
-    {
-      "id": "api-kline",
-      "from": "fastapi",
-      "to": "providers",
-      "label": "K线行情",
-      "variant": "emphasis",
-      "fromSide": "right",
-      "toSide": "left",
-      "labelAt": [
-        600,
-        352
-      ]
-    },
-    {
-      "id": "screen-ind",
-      "from": "screener",
-      "to": "indicators",
-      "label": "技术因子",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "screen-macro",
-      "from": "screener",
-      "to": "macro",
-      "label": "宏观因子",
-      "variant": "dashed",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelAt": [
-        620,
-        205
-      ]
-    },
-    {
-      "id": "ind-providers",
-      "from": "indicators",
-      "to": "providers",
-      "label": "读行情",
-      "variant": "dashed",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 24
-    },
-    {
-      "id": "prov-tencent",
-      "from": "providers",
-      "to": "tencent",
-      "label": "主源",
-      "labelAt": [
-        1052,
-        56
-      ]
-    },
-    {
-      "id": "prov-naver",
-      "from": "providers",
-      "to": "naver",
-      "label": "主源",
-      "labelAt": [
-        1052,
-        171
-      ]
-    },
-    {
-      "id": "prov-gate",
-      "from": "providers",
-      "to": "gate",
-      "label": "主源",
-      "labelAt": [
-        1052,
-        286
-      ]
-    },
-    {
-      "id": "prov-fxfund",
-      "from": "providers",
-      "to": "fxfund",
-      "label": "主源",
-      "labelAt": [
-        1052,
-        401
-      ]
-    },
-    {
-      "id": "prov-fallback",
-      "from": "providers",
-      "to": "fallback",
-      "label": "自动回退",
-      "variant": "dashed",
-      "labelAt": [
-        1048,
-        578
-      ]
-    }
+    { "id": "browser-api", "from": "browser", "to": "api", "label": "HTTP /api/*", "variant": "emphasis", "fromSide": "right", "toSide": "left", "labelAt": [220, 290] },
+    { "id": "api-application", "from": "api", "to": "application", "label": "调用服务", "fromSide": "right", "toSide": "left", "labelAt": [325, 290] },
+    { "id": "application-domain", "from": "application", "to": "domain", "label": "编排算法", "fromSide": "right", "toSide": "left", "labelAt": [495, 290] },
+    { "id": "application-infrastructure", "from": "application", "to": "infrastructure", "label": "端口实现", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom" },
+    { "id": "infrastructure-sources", "from": "infrastructure", "to": "sources", "label": "行情拉取", "variant": "emphasis", "fromSide": "right", "toSide": "left", "labelAt": [1055, 290] },
+    { "id": "infrastructure-sqlite", "from": "infrastructure", "to": "sqlite", "label": "读写", "fromSide": "bottom", "toSide": "top", "labelAt": [955, 330] },
+    { "id": "sqlite-etl", "from": "sqlite", "to": "etl", "label": "migrate_seed 抽取", "variant": "dashed", "fromSide": "right", "toSide": "left", "labelAt": [1040, 464] },
+    { "id": "sources-etl", "from": "sources", "to": "etl", "label": "增量采集", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "id": "etl-ods", "from": "etl", "to": "ods", "label": "load_ods", "fromSide": "bottom", "toSide": "top", "labelAt": [1160, 466] },
+    { "id": "ods-dwd", "from": "ods", "to": "dwd", "label": "build_dwd", "fromSide": "bottom", "toSide": "top", "labelAt": [1160, 590] },
+    { "id": "dwd-dws", "from": "dwd", "to": "dws", "label": "build_dws", "fromSide": "bottom", "toSide": "top", "labelAt": [1160, 690] }
   ],
   "cards": [
-    {
-      "dot": "cyan",
-      "title": "多市场路由",
-      "items": [
-        "A股/美股/港股/ETF → 腾讯",
-        "韩股 → Naver，数字货币 → Gate.io",
-        "外汇 → Frankfurter，基金 → 东方财富"
-      ]
-    },
-    {
-      "dot": "emerald",
-      "title": "高可用降级",
-      "items": [
-        "主源失败 → 备用源（yfinance/akshare/Binance）",
-        "全部失败 → 确定性模拟数据",
-        "source 字段标识 live / mock"
-      ]
-    },
-    {
-      "dot": "violet",
-      "title": "性能设计",
-      "items": [
-        "5 分钟内存缓存（线程安全）",
-        "失败数据源 120 秒熔断"
-      ]
-    },
-    {
-      "dot": "amber",
-      "title": "评分模型",
-      "items": [
-        "技术指标 → 趋势/动能/波动/风险因子",
-        "叠加宏观偏置 → 0-100 综合评分",
-        "推荐附加权原因（7 类）"
-      ]
-    }
+    { "dot": "emerald", "title": "后端分层", "items": ["展示层 → 应用层 → 领域/算法层，依赖方向严格向下", "基础设施层实现 ports.py 端口，由 app.py 构造注入"] },
+    { "dot": "amber", "title": "数仓分层", "items": ["ODS 贴源 → DWD 明细 → DWS 汇总，PostgreSQL 16 独立部署", "ETL 由 migrate_seed 从 research.db 与数据源抽取装载"] },
+    { "dot": "cyan", "title": "高可用降级", "items": ["主源失败 → 备用源（yfinance/akshare/Binance）→ mock 兜底", "外部行情 5min 内存缓存，失败源 120s 熔断"] }
   ]
 }
