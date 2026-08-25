@@ -12,10 +12,6 @@ def get_datasource():
     return routes.container.datasource
 
 
-def get_sync_service():
-    return routes.container.sync_service
-
-
 def get_analysis_service():
     return routes.container.analysis_service
 
