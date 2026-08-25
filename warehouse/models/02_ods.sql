@@ -149,3 +149,81 @@ CREATE TABLE IF NOT EXISTS ods_news (
   sync_batch_id TEXT NOT NULL,
   UNIQUE (source, published_at, title)
 );
+
+-- ============ 外部数据源 ODS ============
+CREATE TABLE IF NOT EXISTS ods_sec_submissions (
+  cik TEXT NOT NULL,
+  ticker TEXT,
+  company_name TEXT NOT NULL,
+  exchange TEXT,
+  sic TEXT,
+  raw_payload JSONB NOT NULL DEFAULT '{}',
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_batch_id TEXT NOT NULL,
+  PRIMARY KEY (cik)
+);
+
+CREATE TABLE IF NOT EXISTS ods_sec_facts (
+  cik TEXT NOT NULL,
+  concept TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  period_end DATE NOT NULL,
+  value DOUBLE PRECISION,
+  raw_payload JSONB NOT NULL DEFAULT '{}',
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_batch_id TEXT NOT NULL,
+  PRIMARY KEY (cik, concept, unit, period_end)
+);
+
+CREATE TABLE IF NOT EXISTS ods_crypto_meta (
+  coin_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  name TEXT NOT NULL,
+  snapshot_date DATE NOT NULL,
+  current_price DOUBLE PRECISION,
+  market_cap DOUBLE PRECISION,
+  total_volume DOUBLE PRECISION,
+  high_24h DOUBLE PRECISION,
+  low_24h DOUBLE PRECISION,
+  market_cap_rank INTEGER,
+  raw_payload JSONB NOT NULL DEFAULT '{}',
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_batch_id TEXT NOT NULL,
+  PRIMARY KEY (coin_id, snapshot_date)
+);
+
+CREATE TABLE IF NOT EXISTS ods_macro_indicators (
+  country_code TEXT NOT NULL,
+  indicator_code TEXT NOT NULL,
+  indicator_name TEXT NOT NULL,
+  date TEXT NOT NULL,
+  value DOUBLE PRECISION,
+  raw_payload JSONB NOT NULL DEFAULT '{}',
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_batch_id TEXT NOT NULL,
+  PRIMARY KEY (country_code, indicator_code, date)
+);
+
+CREATE TABLE IF NOT EXISTS ods_cn_financials (
+  symbol TEXT NOT NULL,
+  report_date TEXT NOT NULL,
+  indicator_name TEXT NOT NULL,
+  indicator_value DOUBLE PRECISION,
+  raw_payload JSONB NOT NULL DEFAULT '{}',
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_batch_id TEXT NOT NULL,
+  PRIMARY KEY (symbol, report_date, indicator_name)
+);
+
+CREATE TABLE IF NOT EXISTS ods_cn_lhb (
+  trade_date TEXT NOT NULL,
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  close_price DOUBLE PRECISION,
+  change_pct DOUBLE PRECISION,
+  reason TEXT NOT NULL DEFAULT '',
+  raw_payload JSONB NOT NULL DEFAULT '{}',
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_batch_id TEXT NOT NULL,
+  PRIMARY KEY (trade_date, code, reason)
+);

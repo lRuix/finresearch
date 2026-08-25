@@ -36,3 +36,22 @@ CREATE TABLE IF NOT EXISTS fact_news (
   tags JSONB NOT NULL DEFAULT '[]',
   UNIQUE (source, published_at, title)
 );
+
+CREATE TABLE IF NOT EXISTS dim_indicator (
+  indicator_id BIGSERIAL PRIMARY KEY,
+  source TEXT NOT NULL,
+  source_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  unit TEXT,
+  frequency TEXT,
+  UNIQUE (source, source_key)
+);
+
+CREATE TABLE IF NOT EXISTS fact_indicator (
+  indicator_id BIGINT NOT NULL REFERENCES dim_indicator(indicator_id),
+  ref_key TEXT NOT NULL,
+  as_of_date DATE NOT NULL,
+  value DOUBLE PRECISION,
+  extra JSONB NOT NULL DEFAULT '{}',
+  PRIMARY KEY (indicator_id, ref_key, as_of_date)
+);

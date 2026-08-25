@@ -16,3 +16,7 @@ SELECT market_id, date_key,
 FROM fact_kline
 WHERE period = 'd'
 GROUP BY market_id, date_key;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS dws_indicator_daily AS
+SELECT indicator_id, ref_key, as_of_date, value
+FROM fact_indicator;
