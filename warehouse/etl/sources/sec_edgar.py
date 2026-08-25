@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 from typing import Any, Iterator
 from urllib.request import Request, urlopen
 
@@ -15,7 +16,10 @@ def _get_json(url: str) -> dict[str, Any]:
         headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"},
     )
     with urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+        data = response.read()
+        if response.headers.get("Content-Encoding") == "gzip":
+            data = gzip.decompress(data)
+        return json.loads(data.decode("utf-8"))
 
 
 def fetch_submissions(cik: str) -> dict[str, Any]:

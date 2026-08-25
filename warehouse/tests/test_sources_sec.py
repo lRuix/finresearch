@@ -1,7 +1,10 @@
 """SEC EDGAR parsing tests."""
 from __future__ import annotations
 
-from etl.sources.sec_edgar import parse_facts, parse_submissions
+import gzip
+import json
+
+from etl.sources.sec_edgar import fetch_submissions, parse_facts, parse_submissions
 
 
 SUBMISSIONS = {
@@ -47,3 +50,27 @@ def test_parse_facts_expands_concepts_without_duplicates():
     assert first["unit"] == "USD"
     assert first["period_end"] == "2025-09-27"
     assert first["value"] == 391035000000.0
+
+
+def test_fetch_submissions_decodes_gzip(monkeypatch):
+    payload = json.dumps({"cik": "0000320193", "name": "Apple Inc."}).encode("utf-8")
+    compressed = gzip.compress(payload)
+
+    class FakeResponse:
+        headers = {"Content-Encoding": "gzip"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return compressed
+
+    monkeypatch.setattr(
+        "etl.sources.sec_edgar.urlopen",
+        lambda request, timeout=30: FakeResponse(),
+    )
+    result = fetch_submissions("0000320193")
+    assert result["name"] == "Apple Inc."
