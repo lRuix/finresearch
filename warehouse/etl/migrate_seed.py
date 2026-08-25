@@ -194,16 +194,9 @@ def _news_params(items: list[dict[str, Any]], batch_id: str) -> list[tuple[Any, 
     return params
 
 
-def load_news(
-    dsn: str, batch_id: str | None = None, include_rss: bool = False
-) -> int:
-    """Load cached macro news into ODS and fact_news."""
-    batch_id = batch_id or _new_batch_id()
-    news_params = _news_params(_news_items(include_rss), batch_id)
-    if not news_params:
-        return 0
-
-    with connect(dsn) as conn, conn.cursor() as cur:
+def _upsert_news(conn: Any, news_params: list[tuple[Any, ...]]) -> None:
+    """Upsert news params into ODS/fact tables on an open connection (no commit)."""
+    with conn.cursor() as cur:
         cur.executemany(
             """
             INSERT INTO ods_news (
@@ -241,6 +234,19 @@ def load_news(
                 for _, _, _, title, source, tags, sentiment, published_at, _, _ in news_params
             ],
         )
+
+
+def load_news(
+    dsn: str, batch_id: str | None = None, include_rss: bool = False
+) -> int:
+    """Load cached macro news into ODS and fact_news."""
+    batch_id = batch_id or _new_batch_id()
+    news_params = _news_params(_news_items(include_rss), batch_id)
+    if not news_params:
+        return 0
+
+    with connect(dsn) as conn:
+        _upsert_news(conn, news_params)
         conn.commit()
     return len(news_params)
 

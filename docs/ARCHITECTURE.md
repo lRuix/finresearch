@@ -72,6 +72,19 @@ flowchart TB
     MACRO -. 实现 .-> PORTS
     REPO -. 实现 .-> PORTS
     IMPL --> TX & NV & GT & BN & FR & EM & YF & AK & MOCK
+
+    subgraph Warehouse["warehouse/ — 独立数仓（PostgreSQL 16）"]
+        MIG["etl/migrate_seed.py<br/>初始迁移 · RSS 装载"]
+        ODS["load_ods.py → ODS<br/>按市场分表"]
+        DWD["build_dwd.py → DWD<br/>dim_* + fact 表"]
+        DWS["build_dws.py → DWS<br/>日频物化视图"]
+        PG[("PostgreSQL 16<br/>warehouse 库")]
+        MIG --> ODS --> DWD --> DWS
+        ODS & DWD & DWS --> PG
+    end
+
+    DB -- "migrate_seed 抽取" --> MIG
+    IMPL -. "增量采集 / RSS" .-> MIG
 ```
 
 ## 依赖规则
@@ -230,6 +243,15 @@ CREATE TABLE sync_watermarks (
 );
 ```
 
+## 数仓（warehouse/）
+
+独立 OLAP 数仓子项目，纯 PostgreSQL 16（Docker Compose 启动），与业务应用解耦；业务 API 暂不消费数仓，先完成数据采集、建模、装载与质量校验。
+
+- **ODS 贴源层**：按市场分表（`ods_klines_a_share / fund / us / kr / hk / fx / crypto` + `ods_news`），保留 `raw_payload`，以幂等键去重。
+- **DWD 明细层**：`dim_date / dim_market / dim_instrument / dim_provider` + `fact_kline`（按 `time` 范围分区）/ `fact_news`；多 provider 按优先级取主源。
+- **DWS 汇总层**：`dws_instrument_daily` / `dws_market_daily` 日频物化视图。
+- **ETL**：`migrate_seed.py` 从 `research.db` 与数据源抽取 → `load_ods.py` → `build_dwd.py` → `build_dws.py`；每日增量由 `sync_incremental.py` 按 `etl_watermarks` 水位线只装载新增 K 线/新闻，ODS/DWD/新闻与水位线推进同事务，失败回滚不推进水位线，事务提交后再刷新 DWS。
+
 ## 启动拓扑
 
 ```text
@@ -241,3 +263,4 @@ CREATE TABLE sync_watermarks (
 
 - 后端：`python -m uvicorn app:app --reload --port 8000`
 - 前端：`pnpm dev` → `http://localhost:5173`
+- 数仓：`docker compose -f warehouse/docker-compose.yml up -d db` → PostgreSQL 16 `:5432`

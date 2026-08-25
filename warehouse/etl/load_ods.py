@@ -136,9 +136,17 @@ def _row_params(row: dict[str, Any], columns: tuple[str, ...]) -> tuple[Any, ...
 
 
 def upsert_ods_rows(
-    dsn: str, market: str, rows: list[dict[str, Any]], batch_size: int = 1000
+    dsn: str,
+    market: str,
+    rows: list[dict[str, Any]],
+    batch_size: int = 1000,
+    conn: Any | None = None,
 ) -> None:
-    """Insert ODS klines, updating conflicting rows in one transaction."""
+    """Insert ODS klines, updating conflicting rows in one transaction.
+
+    Pass an open ``conn`` to join the caller's transaction (commit is left to
+    the caller); otherwise a dedicated connection is opened and committed.
+    """
     table = MARKET_TABLES.get(market)
     if table is None:
         raise ValueError(f"unknown market: {market}")
@@ -159,13 +167,21 @@ def upsert_ods_rows(
         f"ON CONFLICT ({conflict_columns}) DO UPDATE SET {assignments}"
     )
 
-    with connect(dsn) as conn, conn.cursor() as cur:
-        chunk: list[tuple[Any, ...]] = []
-        for row in rows:
-            chunk.append(_row_params({**row, "market": market}, columns))
-            if len(chunk) >= batch_size:
+    def _run(target: Any) -> None:
+        with target.cursor() as cur:
+            chunk: list[tuple[Any, ...]] = []
+            for row in rows:
+                chunk.append(_row_params({**row, "market": market}, columns))
+                if len(chunk) >= batch_size:
+                    cur.executemany(sql, chunk)
+                    chunk.clear()
+            if chunk:
                 cur.executemany(sql, chunk)
-                chunk.clear()
-        if chunk:
-            cur.executemany(sql, chunk)
-        conn.commit()
+
+    if conn is not None:
+        _run(conn)
+        return
+
+    with connect(dsn) as own:
+        _run(own)
+        own.commit()
