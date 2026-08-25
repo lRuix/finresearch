@@ -68,8 +68,21 @@ python -m etl.sync_incremental
 首次运行（水位线为空）等价于全量装载；之后每次只处理新增数据。可用 cron 实现每日更新：
 
 ```cron
-0 9 * * * cd /path/to/finresearch/warehouse && WAREHOUSE_DSN="$WAREHOUSE_DSN" .venv/bin/python -m etl.sync_incremental
+0 9 * * * cd /path/to/finresearch/warehouse && WAREHOUSE_DSN="$WAREHOUSE_DSN" .venv/bin/python -m etl.sync_incremental && .venv/bin/python -m etl.sync_external
 ```
+
+## 运行外部数据源同步
+
+接入 SEC EDGAR（美股财报/公司元数据）、CoinGecko（加密市值）、World Bank（宏观指标）
+与 akshare（A股财务摘要/龙虎榜），每日增量：
+
+```bash
+cd warehouse
+python -m etl.sync_external
+```
+
+各源按独立事务装载并维护 `etl_watermarks` 水位线，失败仅回滚对应源，
+不影响其他源当天数据。SEC 请求带显式 User-Agent；akshare 为惰性导入。
 
 ## 运行测试
 
@@ -78,4 +91,14 @@ cd warehouse
 python -m pytest tests -q
 ```
 
-测试假定数仓为空库或只包含测试自身数据；迁移后再运行测试前，建议先清空 ODS/DWD/DWS 数据，避免断言受种子数据影响。
+测试连接独立的 `warehouse_test` 数据库（需先执行 DDL，见下），与真实数据隔离；
+真实 `warehouse` 库的数据不会影响测试。
+
+```bash
+# 首次准备测试库（容器内执行）
+docker exec warehouse-db-1 psql -U warehouse -d warehouse -c "CREATE DATABASE warehouse_test"
+cd warehouse
+for f in models/01_dim.sql models/02_ods.sql models/03_dwd.sql models/04_dws.sql; do
+  docker exec -i warehouse-db-1 psql -U warehouse -d warehouse_test -v ON_ERROR_STOP=1 -q -f - < "$f"
+done
+```
