@@ -43,3 +43,37 @@ def test_discover_a_share_uses_akshare_spot(monkeypatch):
     items = market.discover_instruments("a-share")
     assert {item["symbol"] for item in items} == {"600519", "000001"}
     assert all(item["market"] == "a-share" for item in items)
+
+
+def test_fetch_klines_routes_a_share_and_normalizes(monkeypatch):
+    payload = {
+        "data": {
+            "sh600519": {
+                "day": [
+                    ["2026-08-01", "10", "10.5", "11", "9", "100"],
+                ]
+            }
+        }
+    }
+    monkeypatch.setattr(market, "_get_json", lambda url, **kw: payload)
+    rows = market.fetch_klines(
+        "a-share", "600519", "d", start="2026-08-01", end="2026-08-02"
+    )
+    assert len(rows) == 1
+    assert rows[0]["open"] == 10
+    assert rows[0]["close"] == 10.5
+    assert rows[0]["volume"] == 100
+
+
+def test_fetch_klines_falls_back_to_mock(monkeypatch):
+    def boom(_url, **kw):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(market, "_get_json", boom)
+
+    def no_ak():
+        raise RuntimeError("no akshare")
+
+    monkeypatch.setattr(market, "_ak", no_ak)
+    rows = market.fetch_klines("a-share", "TEST-MOCK-600519", "d")
+    assert rows  # mock 兜底返回确定性数据
