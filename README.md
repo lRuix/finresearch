@@ -37,7 +37,7 @@ backend/
 ### 数据读写路径
 
 - 设置 `WAREHOUSE_DSN` 环境变量后，应用服务从数仓 PostgreSQL 读取 K 线（`fact_kline`）与推荐缓存（`backend_evaluations`），前端数据全部来自数仓；未设置时回退 SQLite 本地仓库。
-- backend 不再提供运行时行情同步：数据由数仓每日 ETL（`sync_incremental` / `sync_external`）维护，查询缺数据时直接返回已有数据。
+- backend 不再提供运行时行情同步：K 线由数仓直采（`sync_incremental` 直接采集全市场行情 → ODS → DWD），外部指标由 `sync_external` 采集；查询缺数据时直接返回已有数据。`backend/data/research.db` 已退出同步链路。
 - 数据源路由位于 `backend/infrastructure/datasources/provider_impl.py`：A 股/美股/港股/ETF 优先腾讯公开行情，韩股优先 Naver，数字货币优先 Gate.io，外汇优先 Frankfurter，场外基金优先东方财富；`yfinance` 与 `akshare` 作为备用源。
 - 外部行情带 5 分钟内存缓存与 120 秒失败熔断；全市场候选按市场缓存 1 小时，兜底结果缓存 60 秒；首页推荐结果按自然日缓存到 SQLite。
 - 任何数据源不可用时自动回退到确定性模拟数据，保证界面始终可演示。

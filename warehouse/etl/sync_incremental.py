@@ -71,10 +71,12 @@ def sync_incremental(
     dsn: str,
     include_rss: bool = False,
     batch_id: str | None = None,
+    markets: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """直采全市场 K 线增量：discover -> fetch -> ODS -> DWD -> 水位线。"""
     batch_id = batch_id or _new_batch_id()
     stats: dict[str, Any] = {"klines": {}, "news": 0}
+    markets = markets or MARKETS
 
     with connect(dsn) as conn:
         watermarks = _read_watermarks(conn)
@@ -88,7 +90,7 @@ def sync_incremental(
         market_chunks: dict[str, list[dict[str, Any]]] = {}
         new_watermarks: dict[tuple[str, str, str], datetime] = {}
         today = date.today().isoformat()
-        for market_id in MARKETS:
+        for market_id in markets:
             try:
                 instruments = market.discover_instruments(market_id)
             except Exception as exc:  # noqa: BLE001 - 市场发现失败跳过该市场
@@ -187,7 +189,11 @@ def main() -> None:
         "true",
         "yes",
     }
-    stats = sync_incremental(dsn, include_rss=include_rss)
+    markets_env = os.environ.get("WAREHOUSE_MARKETS", "")
+    markets = tuple(
+        market.strip() for market in markets_env.split(",") if market.strip()
+    ) or None
+    stats = sync_incremental(dsn, include_rss=include_rss, markets=markets)
     for market, counts in stats["klines"].items():
         print(f"{market}: ODS={counts['ods']}, DWD={counts['dwd']}")
     print(f"news: {stats['news']}")

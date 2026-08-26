@@ -55,10 +55,10 @@ WAREHOUSE_LIVE_NEWS=1 python -m etl.migrate_seed
 
 ## 运行每日增量更新
 
-增量装载以 `backend/data/research.db` 为增量源，按 `etl_watermarks` 水位线
-只处理每个 (market, symbol, period) 新增的 K 线；新闻按发布时间增量装载
-（`WAREHOUSE_LIVE_NEWS=1` 时额外抓取 RSS）。ODS / DWD / 新闻与水位线推进在
-同一事务内完成，失败回滚且不推进水位线；事务提交后刷新 DWS 物化视图。
+K 线由数仓直采：按市场动态发现标的（A股/港股/场内基金/加密全市场，美股/韩股走
+配置清单，外汇静态全列表），按 `etl_watermarks` 水位线只处理新增 K 线；新闻按
+发布时间增量装载（`WAREHOUSE_LIVE_NEWS=1` 时额外抓取 RSS）。ODS / DWD / 新闻与
+水位线推进在同一事务内完成，失败回滚且不推进水位线；事务提交后刷新 DWS 物化视图。
 
 ```bash
 cd warehouse
@@ -70,6 +70,12 @@ python -m etl.sync_incremental
 ```cron
 0 9 * * * cd /path/to/finresearch/warehouse && WAREHOUSE_DSN="$WAREHOUSE_DSN" .venv/bin/python -m etl.sync_incremental && .venv/bin/python -m etl.sync_external
 ```
+
+可用 `WAREHOUSE_MARKETS` 环境变量限制本次同步的市场（逗号分隔，如
+`WAREHOUSE_MARKETS=fx,us,kr`），便于分市场运行或调试。
+
+> 注意：`backend/data/research.db` 已不再参与每日同步，仅保留为历史数据参考；
+> `migrate_seed.py` 为历史迁移工具，不再作为每日入口。
 
 ## 运行外部数据源同步
 
