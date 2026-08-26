@@ -16,11 +16,28 @@ _STATIC_UNIVERSE = [
     {"symbol": "000660.KS", "name": "SK海力士", "market": "kr", "currency": "KRW", "sector": "半导体", "base_risk": 0.78, "liquidity": 0.9},
     {"symbol": "035420.KS", "name": "NAVER", "market": "kr", "currency": "KRW", "sector": "互联网", "base_risk": 0.7, "liquidity": 0.82},
     {"symbol": "373220.KS", "name": "LG新能源", "market": "kr", "currency": "KRW", "sector": "新能源", "base_risk": 0.75, "liquidity": 0.85},
-    # 外汇（静态主要货币对）
+    # 外汇（静态主要货币对全列表）
     {"symbol": "USDCNY=X", "name": "美元/人民币", "market": "fx", "currency": "CNY", "sector": "主要货币对", "base_risk": 0.35, "liquidity": 1.0},
-    {"symbol": "EURUSD=X", "name": "欧元/美元", "market": "fx", "currency": "USD", "sector": "主要货币对", "base_risk": 0.3, "liquidity": 1.0},
+    {"symbol": "USDHKD=X", "name": "美元/港币", "market": "fx", "currency": "HKD", "sector": "主要货币对", "base_risk": 0.35, "liquidity": 1.0},
+    {"symbol": "USDKRW=X", "name": "美元/韩元", "market": "fx", "currency": "KRW", "sector": "主要货币对", "base_risk": 0.4, "liquidity": 1.0},
     {"symbol": "USDJPY=X", "name": "美元/日元", "market": "fx", "currency": "JPY", "sector": "主要货币对", "base_risk": 0.4, "liquidity": 1.0},
+    {"symbol": "USDSGD=X", "name": "美元/新加坡元", "market": "fx", "currency": "SGD", "sector": "主要货币对", "base_risk": 0.35, "liquidity": 1.0},
+    {"symbol": "USDINR=X", "name": "美元/印度卢比", "market": "fx", "currency": "INR", "sector": "主要货币对", "base_risk": 0.45, "liquidity": 1.0},
+    {"symbol": "USDTHB=X", "name": "美元/泰铢", "market": "fx", "currency": "THB", "sector": "主要货币对", "base_risk": 0.4, "liquidity": 1.0},
+    {"symbol": "USDMXN=X", "name": "美元/墨西哥比索", "market": "fx", "currency": "MXN", "sector": "主要货币对", "base_risk": 0.5, "liquidity": 1.0},
+    {"symbol": "USDZAR=X", "name": "美元/南非兰特", "market": "fx", "currency": "ZAR", "sector": "主要货币对", "base_risk": 0.5, "liquidity": 1.0},
+    {"symbol": "USDBRL=X", "name": "美元/巴西雷亚尔", "market": "fx", "currency": "BRL", "sector": "主要货币对", "base_risk": 0.5, "liquidity": 1.0},
+    {"symbol": "USDCAD=X", "name": "美元/加元", "market": "fx", "currency": "CAD", "sector": "主要货币对", "base_risk": 0.35, "liquidity": 1.0},
+    {"symbol": "USDCHF=X", "name": "美元/瑞郎", "market": "fx", "currency": "CHF", "sector": "主要货币对", "base_risk": 0.3, "liquidity": 1.0},
+    {"symbol": "USDNOK=X", "name": "美元/挪威克朗", "market": "fx", "currency": "NOK", "sector": "主要货币对", "base_risk": 0.45, "liquidity": 1.0},
+    {"symbol": "USDSEK=X", "name": "美元/瑞典克朗", "market": "fx", "currency": "SEK", "sector": "主要货币对", "base_risk": 0.45, "liquidity": 1.0},
+    {"symbol": "USDDKK=X", "name": "美元/丹麦克朗", "market": "fx", "currency": "DKK", "sector": "主要货币对", "base_risk": 0.4, "liquidity": 1.0},
+    {"symbol": "USDPLN=X", "name": "美元/波兰兹罗提", "market": "fx", "currency": "PLN", "sector": "主要货币对", "base_risk": 0.45, "liquidity": 1.0},
+    {"symbol": "USDTRY=X", "name": "美元/土耳其里拉", "market": "fx", "currency": "TRY", "sector": "主要货币对", "base_risk": 0.6, "liquidity": 1.0},
+    {"symbol": "EURUSD=X", "name": "欧元/美元", "market": "fx", "currency": "USD", "sector": "主要货币对", "base_risk": 0.3, "liquidity": 1.0},
     {"symbol": "GBPUSD=X", "name": "英镑/美元", "market": "fx", "currency": "USD", "sector": "主要货币对", "base_risk": 0.32, "liquidity": 1.0},
+    {"symbol": "AUDUSD=X", "name": "澳元/美元", "market": "fx", "currency": "USD", "sector": "主要货币对", "base_risk": 0.4, "liquidity": 1.0},
+    {"symbol": "NZDUSD=X", "name": "纽元/美元", "market": "fx", "currency": "USD", "sector": "主要货币对", "base_risk": 0.4, "liquidity": 1.0},
 ]
 
 
