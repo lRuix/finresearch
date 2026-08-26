@@ -191,6 +191,60 @@ def test_second_run_syncs_only_new_rows(dsn, sync_cleanup, monkeypatch):
         assert cur.fetchone()[0] == 3
 
 
+def test_fx_rows_map_rate_fields(dsn, sync_cleanup, monkeypatch):
+    fx_symbol = "USDCNY=X"
+    rows = [_kline_row("2026-08-01", 7.2), _kline_row("2026-08-02", 7.25)]
+
+    def discover(market_id: str) -> list[dict]:
+        if market_id == "fx":
+            return [
+                {
+                    "market": "fx",
+                    "symbol": fx_symbol,
+                    "name": "USD/CNY",
+                    "currency": "CNY",
+                }
+            ]
+        return []
+
+    def fetch(market_id: str, symbol: str, period: str, start=None, end=None):
+        if market_id != "fx" or symbol != fx_symbol:
+            return []
+        return [row for row in rows if start is None or row["time"] >= start]
+
+    monkeypatch.setattr(market, "discover_instruments", discover)
+    monkeypatch.setattr(market, "fetch_klines", fetch)
+
+    stats = sync_incremental(
+        dsn, batch_id=f"test-sync-{uuid.uuid4()}", markets=("fx",)
+    )
+
+    assert stats["klines"]["fx"]["ods"] == 2
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT base_currency, quote_currency, close_rate, open_rate, high_rate, low_rate
+            FROM ods_klines_fx
+            WHERE provider = 'market' AND symbol = %s
+            ORDER BY ts
+            """,
+            (fx_symbol,),
+        )
+        rows = cur.fetchall()
+        assert len(rows) == 2
+        assert rows[-1] == ("USD", "CNY", 7.25, 1.0, 2.0, 0.5)
+        cur.execute(
+            """
+            SELECT count(*)
+            FROM fact_kline f
+            JOIN dim_instrument i ON i.instrument_id = f.instrument_id
+            WHERE f.provider_id = 'market' AND i.market_id = 'fx' AND i.symbol = %s
+            """,
+            (fx_symbol,),
+        )
+        assert cur.fetchone()[0] == 2
+
+
 def test_failed_run_rolls_back_and_keeps_watermark(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
     discover, fetch = _fake_market(a_share_symbol, [_kline_row("2026-08-01", 1.5)])

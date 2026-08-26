@@ -20,6 +20,7 @@ from etl.migrate_seed import (
     _new_batch_id,
     _news_items,
     _news_params,
+    _split_fx_currency,
     _upsert_news,
     DEFAULT_DSN,
 )
@@ -113,8 +114,9 @@ def sync_incremental(
                 time.sleep(REQUEST_DELAY_SECONDS)
                 if not rows:
                     continue
-                ods_rows = [
-                    {
+                market_ods_rows: list[dict[str, Any]] = []
+                for row in rows:
+                    ods_row = {
                         "provider": "market",
                         "market": market_id,
                         "symbol": symbol,
@@ -128,8 +130,28 @@ def sync_incremental(
                         "raw_payload": {},
                         "sync_batch_id": batch_id,
                     }
-                    for row in rows
-                ]
+                    if market_id == "fx":
+                        base_currency, quote_currency = _split_fx_currency(symbol)
+                        if base_currency is None or quote_currency is None:
+                            logger.warning(
+                                "Skipping fx kline symbol=%s ts=%s: cannot parse currency pair",
+                                symbol,
+                                row["time"],
+                            )
+                            continue
+                        ods_row.update(
+                            {
+                                "base_currency": base_currency,
+                                "quote_currency": quote_currency,
+                                "close_rate": row["close"],
+                                "prev_rate": None,
+                                "open_rate": row["open"],
+                                "high_rate": row["high"],
+                                "low_rate": row["low"],
+                            }
+                        )
+                    market_ods_rows.append(ods_row)
+                ods_rows = market_ods_rows
                 market_chunks.setdefault(market_id, []).extend(ods_rows)
                 try:
                     ts = max(_parse_time(row["time"]) for row in rows)
