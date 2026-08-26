@@ -1,39 +1,38 @@
 """Incremental warehouse sync.
 
-以 SQLite ``research.db`` 为增量源：按 ``etl_watermarks`` 水位线只装载
-每个 (market, symbol, period) 新增的 K 线，ODS/DWD/新闻装载与水位线推进在
+直采全市场 K 线：按市场动态发现标的，按 ``etl_watermarks`` 水位线只装载
+每个 (market, symbol, period) 新增的 K 线；ODS/DWD/新闻装载与水位线推进在
 同一事务内完成，失败回滚且不推进水位线；事务提交后再刷新 DWS 物化视图。
 """
 from __future__ import annotations
 
-from contextlib import closing
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import logging
 import os
-from pathlib import Path
-import sqlite3
-import sys
-from typing import Any, Iterator
+import time
+from typing import Any
 
 from etl.build_dwd import _parse_time, build_dwd
 from etl.build_dws import refresh_dws
 from etl.db import connect
 from etl.load_ods import upsert_ods_rows
 from etl.migrate_seed import (
-    _mapped_sqlite_row,
     _new_batch_id,
     _news_items,
     _news_params,
     _upsert_news,
-    DEFAULT_DB_PATH,
     DEFAULT_DSN,
 )
+from etl.sources import market
 
 
 logger = logging.getLogger(__name__)
 
 KLINE_SCOPE_PREFIX = "kline:"
 NEWS_SCOPE = "news"
+MARKETS = ("a-share", "fund", "us", "kr", "hk", "fx", "crypto")
+REQUEST_DELAY_SECONDS = 0.15
+FIRST_SYNC_START = "2024-01-01"
 
 
 def _scope_key(market: str, symbol: str, period: str) -> str:
@@ -68,44 +67,12 @@ def _read_watermarks(
     return watermarks
 
 
-def iter_sqlite_klines_after(
-    db_path: str | Path,
-    watermarks: dict[tuple[str, str, str], datetime | None],
-    batch_id: str,
-) -> Iterator[dict[str, Any]]:
-    """Yield mapped ODS rows for SQLite klines past each key's watermark."""
-    with closing(sqlite3.connect(str(db_path))) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            """
-            SELECT market, symbol, period, time, open, high, low, close, volume
-            FROM klines
-            ORDER BY market, symbol, period, time
-            """
-        )
-        for row in cursor:
-            key = (row["market"], row["symbol"], row["period"])
-            last = watermarks.get(key)
-            if last is not None:
-                try:
-                    ts = _parse_time(row["time"])
-                except (TypeError, ValueError):
-                    # 无法解析时间的行照常装载（由 DWD 层跳过），但不影响水位线。
-                    ts = None
-                if ts is not None and ts <= last:
-                    continue
-            mapped = _mapped_sqlite_row(row, batch_id)
-            if mapped is not None:
-                yield mapped
-
-
 def sync_incremental(
     dsn: str,
-    db_path: str | Path,
     include_rss: bool = False,
     batch_id: str | None = None,
 ) -> dict[str, Any]:
-    """Incrementally sync SQLite deltas into ODS/DWD, then refresh DWS."""
+    """直采全市场 K 线增量：discover -> fetch -> ODS -> DWD -> 水位线。"""
     batch_id = batch_id or _new_batch_id()
     stats: dict[str, Any] = {"klines": {}, "news": 0}
 
@@ -120,21 +87,59 @@ def sync_incremental(
 
         market_chunks: dict[str, list[dict[str, Any]]] = {}
         new_watermarks: dict[tuple[str, str, str], datetime] = {}
-        for row in iter_sqlite_klines_after(db_path, kline_wm, batch_id):
-            market = row["market"]
-            market_chunks.setdefault(market, []).append(row)
-            key = (market, row["symbol"], row["interval"])
+        today = date.today().isoformat()
+        for market_id in MARKETS:
             try:
-                ts = _parse_time(row["ts"])
-            except (TypeError, ValueError):
+                instruments = market.discover_instruments(market_id)
+            except Exception as exc:  # noqa: BLE001 - 市场发现失败跳过该市场
+                logger.warning("discover %s failed: %s", market_id, exc)
                 continue
-            if key not in new_watermarks or ts > new_watermarks[key]:
-                new_watermarks[key] = ts
+            for item in instruments:
+                symbol = item["symbol"]
+                key = (market_id, symbol, "d")
+                last = kline_wm.get(key)
+                start = (
+                    (last + timedelta(days=1)).date().isoformat()
+                    if last is not None
+                    else FIRST_SYNC_START
+                )
+                try:
+                    rows = market.fetch_klines(market_id, symbol, "d", start=start, end=today)
+                except Exception as exc:  # noqa: BLE001 - 单标的失败跳过
+                    logger.warning("fetch %s %s failed: %s", market_id, symbol, exc)
+                    continue
+                time.sleep(REQUEST_DELAY_SECONDS)
+                if not rows:
+                    continue
+                ods_rows = [
+                    {
+                        "provider": "market",
+                        "market": market_id,
+                        "symbol": symbol,
+                        "interval": "d",
+                        "ts": row["time"],
+                        "open": row["open"],
+                        "high": row["high"],
+                        "low": row["low"],
+                        "close": row["close"],
+                        "volume": row["volume"],
+                        "raw_payload": {},
+                        "sync_batch_id": batch_id,
+                    }
+                    for row in rows
+                ]
+                market_chunks.setdefault(market_id, []).extend(ods_rows)
+                try:
+                    ts = max(_parse_time(row["time"]) for row in rows)
+                except (TypeError, ValueError):
+                    continue
+                if key not in new_watermarks or ts > new_watermarks[key]:
+                    new_watermarks[key] = ts
 
-        for market, rows in market_chunks.items():
-            upsert_ods_rows(dsn, market, rows, conn=conn)
-            affected = build_dwd(dsn, market, conn=conn)
-            stats["klines"][market] = {"ods": len(rows), "dwd": affected}
+        for market_id, rows in market_chunks.items():
+            upsert_ods_rows(dsn, market_id, rows, conn=conn)
+            affected = build_dwd(dsn, market_id, conn=conn)
+            stats["klines"][market_id] = {"ods": len(rows), "dwd": affected}
 
         with conn.cursor() as cur:
             for key, ts in new_watermarks.items():
@@ -177,13 +182,12 @@ def sync_incremental(
 
 def main() -> None:
     dsn = os.environ.get("WAREHOUSE_DSN", DEFAULT_DSN)
-    db_path = Path(os.environ.get("WAREHOUSE_DB_PATH", str(DEFAULT_DB_PATH)))
     include_rss = os.environ.get("WAREHOUSE_LIVE_NEWS", "").lower() in {
         "1",
         "true",
         "yes",
     }
-    stats = sync_incremental(dsn, db_path, include_rss=include_rss)
+    stats = sync_incremental(dsn, include_rss=include_rss)
     for market, counts in stats["klines"].items():
         print(f"{market}: ODS={counts['ods']}, DWD={counts['dwd']}")
     print(f"news: {stats['news']}")

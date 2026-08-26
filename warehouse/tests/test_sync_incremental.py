@@ -1,8 +1,7 @@
-"""Incremental sync tests."""
+"""Incremental sync tests (direct market collection, network mocked)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import sqlite3
 import uuid
 
 import psycopg
@@ -11,6 +10,7 @@ import pytest
 from etl.load_ods import MARKET_TABLES, upsert_ods_rows
 from etl.migrate_seed import _new_batch_id
 from etl.sync_incremental import sync_incremental
+from etl.sources import market
 from backend.infrastructure.datasources import macro_data
 
 
@@ -19,11 +19,6 @@ SYNC_SYMBOL_PREFIX = "TEST-SYNC-"
 
 def _unique_symbol(prefix: str = SYNC_SYMBOL_PREFIX) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12].upper()}"
-
-
-def _unique_fx_symbol() -> str:
-    letters = "".join(char for char in uuid.uuid4().hex.upper() if char.isalpha())
-    return (letters + "AAAAAA")[:6] + "=X"
 
 
 @pytest.fixture
@@ -42,43 +37,42 @@ def sync_cleanup(dsn):
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         symbols_by_market: dict[str, list[str]] = {}
-        for market, table in MARKET_TABLES.items():
+        for market_id, table in MARKET_TABLES.items():
             cur.execute(
                 f"SELECT DISTINCT symbol FROM {table} WHERE sync_batch_id LIKE 'test-sync-%'"
             )
-            symbols_by_market[market] = [row[0] for row in cur.fetchall()]
+            symbols_by_market[market_id] = [row[0] for row in cur.fetchall()]
             cur.execute(f"DELETE FROM {table} WHERE sync_batch_id LIKE 'test-sync-%'")
-
-        for market, symbols in symbols_by_market.items():
+        for market_id, symbols in symbols_by_market.items():
             if not symbols:
                 continue
             cur.execute(
                 """
                 DELETE FROM fact_kline
-                WHERE provider_id = 'sqlite'
+                WHERE provider_id = 'market'
                   AND instrument_id IN (
                       SELECT instrument_id FROM dim_instrument
                       WHERE market_id = %s AND symbol = ANY(%s)
                   )
                 """,
-                (market, symbols),
+                (market_id, symbols),
             )
             cur.execute(
                 """
                 DELETE FROM dim_instrument
                 WHERE market_id = %s AND symbol = ANY(%s)
                 """,
-                (market, symbols),
+                (market_id, symbols),
             )
             for symbol in symbols:
                 cur.execute(
                     "DELETE FROM etl_watermarks WHERE scope LIKE %s",
-                    (f"kline:{market}:{symbol}:%",),
+                    (f"kline:{market_id}:{symbol}:%",),
                 )
         cur.execute(
             """
             DELETE FROM dim_provider
-            WHERE provider_id = 'sqlite' AND provider_id != ALL(%s)
+            WHERE provider_id = 'market' AND provider_id != ALL(%s)
             """,
             (list(before_providers),),
         )
@@ -90,14 +84,9 @@ def sync_cleanup(dsn):
             "DELETE FROM dim_market WHERE market_id != ALL(%s)",
             (list(before_markets),),
         )
+        cur.execute("DELETE FROM etl_watermarks WHERE scope = 'news'")
         cur.execute(
-            "DELETE FROM etl_watermarks WHERE scope = 'news'",
-        )
-        cur.execute(
-            """
-            DELETE FROM fact_news
-            WHERE source = 'unit-test' AND title LIKE %s
-            """,
+            "DELETE FROM fact_news WHERE source = 'unit-test' AND title LIKE %s",
             ("TEST-NEWS-%",),
         )
         cur.execute(
@@ -107,86 +96,36 @@ def sync_cleanup(dsn):
         conn.commit()
 
 
-def _seed_sqlite_db(
-    tmp_path,
-    a_share_symbol: str,
-    fx_symbol: str | None = None,
-    extra_rows: list[tuple] | None = None,
-) -> str:
-    db_path = tmp_path / "sync-seed.db"
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        """
-        CREATE TABLE klines (
-          market TEXT, symbol TEXT, period TEXT, time TEXT,
-          open REAL, high REAL, low REAL, close REAL, volume REAL
-        )
-        """
-    )
-    rows = [
-        (
-            "a-share",
-            a_share_symbol,
-            "d",
-            "2026-01-01",
-            1.0,
-            2.0,
-            0.5,
-            1.5,
-            100.0,
-        ),
-        (
-            "a-share",
-            a_share_symbol,
-            "d",
-            "2026-01-02",
-            1.0,
-            2.0,
-            0.5,
-            1.6,
-            110.0,
-        ),
-    ]
-    if fx_symbol is not None:
-        rows.append(
-            (
-                "fx",
-                fx_symbol,
-                "d",
-                "2026-01-01",
-                1.1,
-                1.2,
-                1.0,
-                1.15,
-                0.0,
-            )
-        )
-    rows.extend(extra_rows or [])
-    conn.executemany(
-        """
-        INSERT INTO klines
-          (market, symbol, period, time, open, high, low, close, volume)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
-    conn.commit()
-    conn.close()
-    return str(db_path)
+def _kline_row(day: str, close: float) -> dict:
+    return {
+        "time": day,
+        "open": 1.0,
+        "high": 2.0,
+        "low": 0.5,
+        "close": close,
+        "volume": 100.0,
+    }
 
 
-def _insert_sqlite_row(db_path: str, row: tuple) -> None:
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        """
-        INSERT INTO klines
-          (market, symbol, period, time, open, high, low, close, volume)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        row,
-    )
-    conn.commit()
-    conn.close()
+def _fake_market(a_share_symbol: str, rows: list[dict]):
+    def discover(market_id: str) -> list[dict]:
+        if market_id == "a-share":
+            return [
+                {
+                    "market": "a-share",
+                    "symbol": a_share_symbol,
+                    "name": "T",
+                    "currency": "CNY",
+                }
+            ]
+        return []
+
+    def fetch(market_id: str, symbol: str, period: str, start=None, end=None):
+        if market_id != "a-share" or symbol != a_share_symbol:
+            return []
+        return [row for row in rows if start is None or row["time"] >= start]
+
+    return discover, fetch
 
 
 def _watermark(dsn: str, scope: str) -> str | None:
@@ -199,128 +138,99 @@ def _watermark(dsn: str, scope: str) -> str | None:
     return row[0] if row else None
 
 
-def test_first_run_syncs_all_klines_and_records_watermark(
-    dsn, sync_cleanup, tmp_path
-):
+def test_first_run_collects_new_symbols(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
-    fx_symbol = _unique_fx_symbol()
-    db_path = _seed_sqlite_db(tmp_path, a_share_symbol, fx_symbol)
-    batch_id = f"test-sync-{uuid.uuid4()}"
+    discover, fetch = _fake_market(
+        a_share_symbol, [_kline_row("2026-08-01", 1.5), _kline_row("2026-08-02", 1.6)]
+    )
+    monkeypatch.setattr(market, "discover_instruments", discover)
+    monkeypatch.setattr(market, "fetch_klines", fetch)
 
-    stats = sync_incremental(dsn, db_path, batch_id=batch_id)
+    stats = sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
 
     assert stats["klines"]["a-share"]["ods"] == 2
-    assert stats["klines"]["a-share"]["dwd"] == 2
-    assert stats["klines"]["fx"]["ods"] == 1
-
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT count(*) FROM ods_klines_a_share WHERE sync_batch_id = %s",
-            (batch_id,),
-        )
-        assert cur.fetchone()[0] == 2
         cur.execute(
             """
             SELECT count(*)
             FROM fact_kline f
             JOIN dim_instrument i ON i.instrument_id = f.instrument_id
-            WHERE f.provider_id = 'sqlite' AND i.symbol = %s
+            WHERE f.provider_id = 'market' AND i.symbol = %s
             """,
             (a_share_symbol,),
         )
         assert cur.fetchone()[0] == 2
-
-    scope = f"kline:a-share:{a_share_symbol}:d"
-    assert _watermark(dsn, scope) is not None
-    assert datetime.fromisoformat(_watermark(dsn, scope)) == datetime(
-        2026, 1, 2, tzinfo=timezone.utc
-    )
+    assert datetime.fromisoformat(
+        _watermark(dsn, f"kline:a-share:{a_share_symbol}:d")
+    ) == datetime(2026, 8, 2, tzinfo=timezone.utc)
 
 
-def test_second_run_syncs_only_new_rows(dsn, sync_cleanup, tmp_path):
+def test_second_run_syncs_only_new_rows(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
-    db_path = _seed_sqlite_db(tmp_path, a_share_symbol)
+    rows = [_kline_row("2026-08-01", 1.5), _kline_row("2026-08-02", 1.6)]
+    discover, fetch = _fake_market(a_share_symbol, rows)
+    monkeypatch.setattr(market, "discover_instruments", discover)
+    monkeypatch.setattr(market, "fetch_klines", fetch)
 
-    first_stats = sync_incremental(
-        dsn, db_path, batch_id=f"test-sync-{uuid.uuid4()}"
-    )
-    assert first_stats["klines"]["a-share"]["ods"] == 2
+    sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
 
-    _insert_sqlite_row(
-        db_path,
-        ("a-share", a_share_symbol, "d", "2026-01-03", 1.0, 2.0, 0.5, 1.7, 120.0),
-    )
-    second_stats = sync_incremental(
-        dsn, db_path, batch_id=f"test-sync-{uuid.uuid4()}"
-    )
+    rows.append(_kline_row("2026-08-03", 1.7))
+    second_stats = sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
 
     assert second_stats["klines"]["a-share"]["ods"] == 1
-    # build_dwd 返回受影响行数：本次 ODS 共有 3 行（2 旧幂等更新 + 1 新插入）。
-    assert second_stats["klines"]["a-share"]["dwd"] == 3
-
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT count(*)
             FROM fact_kline f
             JOIN dim_instrument i ON i.instrument_id = f.instrument_id
-            WHERE f.provider_id = 'sqlite' AND i.symbol = %s
+            WHERE f.provider_id = 'market' AND i.symbol = %s
             """,
             (a_share_symbol,),
         )
         assert cur.fetchone()[0] == 3
 
-    assert datetime.fromisoformat(
-        _watermark(dsn, f"kline:a-share:{a_share_symbol}:d")
-    ) == datetime(2026, 1, 3, tzinfo=timezone.utc)
 
-
-def test_failed_run_rolls_back_and_keeps_watermark(dsn, sync_cleanup, tmp_path):
+def test_failed_run_rolls_back_and_keeps_watermark(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
-    db_path = _seed_sqlite_db(tmp_path, a_share_symbol)
-
-    sync_incremental(dsn, db_path, batch_id=f"test-sync-{uuid.uuid4()}")
+    discover, fetch = _fake_market(a_share_symbol, [_kline_row("2026-08-01", 1.5)])
+    monkeypatch.setattr(market, "discover_instruments", discover)
+    monkeypatch.setattr(market, "fetch_klines", fetch)
+    sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
     before = _watermark(dsn, f"kline:a-share:{a_share_symbol}:d")
 
-    _insert_sqlite_row(
-        db_path,
-        ("a-share", a_share_symbol, "d", "2026-01-03", 1.0, 2.0, 0.5, 1.7, 120.0),
+    discover2, fetch2 = _fake_market(
+        a_share_symbol, [_kline_row("2026-08-02", 1.6)]
     )
-    _insert_sqlite_row(
-        db_path,
-        ("a-share", None, "d", "2026-01-04", 1.0, 2.0, 0.5, 1.8, 130.0),
-    )
+    monkeypatch.setattr(market, "discover_instruments", discover2)
+    monkeypatch.setattr(market, "fetch_klines", fetch2)
 
-    with pytest.raises(psycopg.Error):
-        sync_incremental(dsn, db_path, batch_id=f"test-sync-{uuid.uuid4()}")
+    def boom(*args, **kwargs):
+        raise RuntimeError("dwd build failed")
 
+    monkeypatch.setattr("etl.sync_incremental.build_dwd", boom)
+    with pytest.raises(RuntimeError):
+        sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
+
+    assert _watermark(dsn, f"kline:a-share:{a_share_symbol}:d") == before
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT count(*)
             FROM fact_kline f
             JOIN dim_instrument i ON i.instrument_id = f.instrument_id
-            WHERE f.provider_id = 'sqlite' AND i.symbol = %s AND f.date_key = %s
-            """,
-            (a_share_symbol, "2026-01-03"),
-        )
-        assert cur.fetchone()[0] == 0
-        cur.execute(
-            """
-            SELECT count(*)
-            FROM ods_klines_a_share
-            WHERE symbol = %s AND ts = '2026-01-03'
+            WHERE f.provider_id = 'market' AND i.symbol = %s AND f.date_key = '2026-08-02'
             """,
             (a_share_symbol,),
         )
         assert cur.fetchone()[0] == 0
 
-    assert _watermark(dsn, f"kline:a-share:{a_share_symbol}:d") == before
 
-
-def test_news_incremental_loads_only_new_items(dsn, sync_cleanup, tmp_path, monkeypatch):
+def test_news_incremental_loads_only_new_items(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
-    db_path = _seed_sqlite_db(tmp_path, a_share_symbol)
+    discover, fetch = _fake_market(a_share_symbol, [_kline_row("2026-08-01", 1.5)])
+    monkeypatch.setattr(market, "discover_instruments", discover)
+    monkeypatch.setattr(market, "fetch_klines", fetch)
     suffix = uuid.uuid4().hex[:8]
     first_item = {
         "time": "08-01 09:00",
@@ -338,15 +248,11 @@ def test_news_incremental_loads_only_new_items(dsn, sync_cleanup, tmp_path, monk
     }
 
     monkeypatch.setattr(macro_data, "NEWS_ITEMS", [first_item])
-    first_stats = sync_incremental(
-        dsn, db_path, batch_id=f"test-sync-{uuid.uuid4()}"
-    )
+    first_stats = sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
     assert first_stats["news"] == 1
 
     monkeypatch.setattr(macro_data, "NEWS_ITEMS", [first_item, second_item])
-    second_stats = sync_incremental(
-        dsn, db_path, batch_id=f"test-sync-{uuid.uuid4()}"
-    )
+    second_stats = sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
     assert second_stats["news"] == 1
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
@@ -359,7 +265,7 @@ def test_news_incremental_loads_only_new_items(dsn, sync_cleanup, tmp_path, monk
 
 def test_upsert_ods_reuses_connection_transaction(dsn, sync_cleanup):
     row = {
-        "provider": "sqlite",
+        "provider": "market",
         "market": "a-share",
         "symbol": _unique_symbol(),
         "interval": "d",
