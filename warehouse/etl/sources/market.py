@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import threading
 import time
@@ -739,7 +740,11 @@ def get_kline_with_source(
                 rows = _try_provider("yfinance", provider_key, yfinance_klines, symbol, interval, limit)
     if rows:
         source = "live"
-    if not rows:
+    if not rows and not os.environ.get("WAREHOUSE_NO_MOCK", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
         rows = mock_klines(symbol, market, interval, limit)
         source = "mock"
     _cache_set(key, rows, source)

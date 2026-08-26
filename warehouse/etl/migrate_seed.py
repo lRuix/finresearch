@@ -167,10 +167,9 @@ def _parse_news_time(value: str) -> datetime:
 
 
 def _news_items(include_rss: bool) -> list[dict[str, Any]]:
-    items = list(macro_data.NEWS_ITEMS)
     if include_rss:
-        items.extend(macro_data.fetch_rss_news())
-    return items
+        return macro_data.fetch_rss_news()
+    return list(macro_data.NEWS_ITEMS)
 
 
 def _news_params(items: list[dict[str, Any]], batch_id: str) -> list[tuple[Any, ...]]:
