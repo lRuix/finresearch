@@ -95,6 +95,20 @@ def _get_json(
         return json.loads(response.read().decode("utf-8"))
 
 
+def _get_text(
+    url: str,
+    encoding: str = "utf-8",
+    timeout: int = 8,
+    headers: dict[str, str] | None = None,
+) -> str:
+    request_headers = {"User-Agent": "finresearch-warehouse/1.0"}
+    if headers:
+        request_headers.update(headers)
+    request = Request(url, headers=request_headers)
+    with urlopen(request, timeout=timeout) as response:
+        return response.read().decode(encoding, errors="replace")
+
+
 def _ak() -> Any:
     import akshare  # lazy: heavy dependency
 
