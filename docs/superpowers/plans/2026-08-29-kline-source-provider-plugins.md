@@ -691,13 +691,13 @@ git commit -m "feat: 新增每日真实数据同步自动化入口"
 - Delete: `warehouse/tests/test_sources_market.py`
 - Modify: `warehouse/README.md`
 
-- [ ] **Step 1: 删除旧文件**
+- [x] **Step 1: 删除旧文件**
 
 ```bash
 git rm warehouse/etl/sources/market.py warehouse/tests/test_sources_market.py
 ```
 
-- [ ] **Step 2: 更新 README**
+- [x] **Step 2: 更新 README**
 
 README 的每日增量命令改为：
 
@@ -708,12 +708,12 @@ python -m etl.sync_daily
 
 并说明 `WAREHOUSE_SOURCE_DISABLED` 可禁用数据源，真实源失败不写 mock。
 
-- [ ] **Step 3: 运行全量 warehouse 测试**
+- [x] **Step 3: 运行全量 warehouse 测试**
 
 Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests -q`
 Expected: 全部 PASS，`warehouse_test` 测试库已初始化。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add -A warehouse/etl/sources warehouse/tests warehouse/README.md
@@ -724,10 +724,10 @@ git commit -m "refactor: 移除 market.py 并完成数据源插件化"
 
 ## 完成标准
 
-- [ ] `market.py` 已删除，`sync_incremental.py` 只依赖 `registry`
-- [ ] 每个 K 线数据源是独立脚本，统一 `fetch_klines` 接口
-- [ ] ODS 贴源原样写入 native 字段与 `raw_payload`
-- [ ] 真实源失败返回空，不写 mock
-- [ ] `sync_daily.py` 可一行命令调用并返回退出码
-- [ ] `warehouse/tests` 全部 PASS
-- [ ] README 同步更新
+- [x] `market.py` 已删除，`sync_incremental.py` 只依赖 `registry`
+- [x] 每个 K 线数据源是独立脚本，统一 `fetch_klines` 接口
+- [x] ODS 贴源原样写入 native 字段与 `raw_payload`
+- [x] 真实源失败返回空，不写 mock
+- [x] `sync_daily.py` 可一行命令调用并返回退出码
+- [x] `warehouse/tests` 全部 PASS
+- [x] README 同步更新
