@@ -16,6 +16,22 @@ _STATIC_UNIVERSE = [
     {"symbol": "000660.KS", "name": "SK海力士", "market": "kr", "currency": "KRW", "sector": "半导体", "base_risk": 0.78, "liquidity": 0.9},
     {"symbol": "035420.KS", "name": "NAVER", "market": "kr", "currency": "KRW", "sector": "互联网", "base_risk": 0.7, "liquidity": 0.82},
     {"symbol": "373220.KS", "name": "LG新能源", "market": "kr", "currency": "KRW", "sector": "新能源", "base_risk": 0.75, "liquidity": 0.85},
+    # A 股（东财全市场接口不可达时的代表性标的）
+    {"symbol": "600519", "name": "贵州茅台", "market": "a-share", "currency": "CNY", "sector": "消费", "base_risk": 0.62, "liquidity": 0.95},
+    {"symbol": "000001", "name": "平安银行", "market": "a-share", "currency": "CNY", "sector": "银行", "base_risk": 0.58, "liquidity": 0.92},
+    {"symbol": "300750", "name": "宁德时代", "market": "a-share", "currency": "CNY", "sector": "新能源", "base_risk": 0.74, "liquidity": 0.9},
+    {"symbol": "601318", "name": "中国平安", "market": "a-share", "currency": "CNY", "sector": "保险", "base_risk": 0.6, "liquidity": 0.9},
+    {"symbol": "600036", "name": "招商银行", "market": "a-share", "currency": "CNY", "sector": "银行", "base_risk": 0.55, "liquidity": 0.93},
+    # 基金（代表性场内/场外基金）
+    {"symbol": "110022", "name": "易方达消费行业", "market": "fund", "currency": "CNY", "sector": "消费主题", "base_risk": 0.7, "liquidity": 0.8},
+    {"symbol": "161725", "name": "招商中证白酒", "market": "fund", "currency": "CNY", "sector": "消费主题", "base_risk": 0.75, "liquidity": 0.78},
+    {"symbol": "510300", "name": "沪深300ETF", "market": "fund", "currency": "CNY", "sector": "宽基指数", "base_risk": 0.6, "liquidity": 0.94},
+    {"symbol": "159915", "name": "创业板ETF", "market": "fund", "currency": "CNY", "sector": "宽基指数", "base_risk": 0.72, "liquidity": 0.9},
+    # 港股（腾讯行情主源）
+    {"symbol": "0700.HK", "name": "腾讯控股", "market": "hk", "currency": "HKD", "sector": "互联网", "base_risk": 0.68, "liquidity": 0.96},
+    {"symbol": "9988.HK", "name": "阿里巴巴-W", "market": "hk", "currency": "HKD", "sector": "互联网", "base_risk": 0.72, "liquidity": 0.95},
+    {"symbol": "3690.HK", "name": "美团-W", "market": "hk", "currency": "HKD", "sector": "本地生活", "base_risk": 0.76, "liquidity": 0.9},
+    {"symbol": "1810.HK", "name": "小米集团-W", "market": "hk", "currency": "HKD", "sector": "消费电子", "base_risk": 0.7, "liquidity": 0.92},
     # 外汇（静态主要货币对全列表）
     {"symbol": "USDCNY=X", "name": "美元/人民币", "market": "fx", "currency": "CNY", "sector": "主要货币对", "base_risk": 0.35, "liquidity": 1.0},
     {"symbol": "USDHKD=X", "name": "美元/港币", "market": "fx", "currency": "HKD", "sector": "主要货币对", "base_risk": 0.35, "liquidity": 1.0},
@@ -38,6 +54,11 @@ _STATIC_UNIVERSE = [
     {"symbol": "GBPUSD=X", "name": "英镑/美元", "market": "fx", "currency": "USD", "sector": "主要货币对", "base_risk": 0.32, "liquidity": 1.0},
     {"symbol": "AUDUSD=X", "name": "澳元/美元", "market": "fx", "currency": "USD", "sector": "主要货币对", "base_risk": 0.4, "liquidity": 1.0},
     {"symbol": "NZDUSD=X", "name": "纽元/美元", "market": "fx", "currency": "USD", "sector": "主要货币对", "base_risk": 0.4, "liquidity": 1.0},
+    # 加密（Gate 行情主源）
+    {"symbol": "BTCUSDT", "name": "Bitcoin", "market": "crypto", "currency": "USDT", "sector": "数字资产", "base_risk": 0.85, "liquidity": 1.0},
+    {"symbol": "ETHUSDT", "name": "Ethereum", "market": "crypto", "currency": "USDT", "sector": "数字资产", "base_risk": 0.9, "liquidity": 0.98},
+    {"symbol": "SOLUSDT", "name": "Solana", "market": "crypto", "currency": "USDT", "sector": "数字资产", "base_risk": 0.95, "liquidity": 0.92},
+    {"symbol": "BNBUSDT", "name": "BNB", "market": "crypto", "currency": "USDT", "sector": "数字资产", "base_risk": 0.88, "liquidity": 0.9},
 ]
 
 
