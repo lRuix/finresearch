@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-CONFIG_MARKETS = ("us", "kr", "fx")
+CONFIG_MARKETS = ("a-share", "fund", "us", "kr", "hk", "fx", "crypto")
 
 _STATIC_UNIVERSE = [
     # 美股（无免费全量列表，配置代表标的）
@@ -63,7 +63,7 @@ _STATIC_UNIVERSE = [
 
 
 def static_universe() -> list[dict]:
-    """美股/韩股配置清单 + 外汇静态清单（无免费全量源的市场走这里）。"""
+    """全市场代表性静态清单，作为真实源失败或无全量源时的兜底。"""
     return [dict(item) for item in _STATIC_UNIVERSE]
 
 

@@ -62,17 +62,20 @@ K 线由数仓直采：按市场动态发现标的（A股/港股/场内基金/�
 
 ```bash
 cd warehouse
-python -m etl.sync_incremental
+python -m etl.sync_daily
 ```
 
 首次运行（水位线为空）等价于全量装载；之后每次只处理新增数据。可用 cron 实现每日更新：
 
 ```cron
-0 9 * * * cd /path/to/finresearch/warehouse && WAREHOUSE_DSN="$WAREHOUSE_DSN" .venv/bin/python -m etl.sync_incremental && .venv/bin/python -m etl.sync_external
+0 9 * * * cd /path/to/finresearch/warehouse && WAREHOUSE_DSN="$WAREHOUSE_DSN" .venv/bin/python -m etl.sync_daily && .venv/bin/python -m etl.sync_external
 ```
 
 可用 `WAREHOUSE_MARKETS` 环境变量限制本次同步的市场（逗号分隔，如
 `WAREHOUSE_MARKETS=fx,us,kr`），便于分市场运行或调试。
+
+可用 `WAREHOUSE_SOURCE_DISABLED=gate,yfinance` 禁用指定数据源；真实数据源失败时
+跳过对应标的，不写入 mock 数据。
 
 > 注意：`backend/data/research.db` 已不再参与每日同步，仅保留为历史数据参考；
 > `migrate_seed.py` 为历史迁移工具，不再作为每日入口。
