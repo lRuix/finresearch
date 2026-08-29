@@ -578,7 +578,7 @@ git commit -m "feat: 新增数据源注册表与编排"
 - Modify: `warehouse/etl/sync_incremental.py`
 - Test: `warehouse/tests/test_sync_incremental.py`
 
-- [ ] **Step 1: 更新失败测试**
+- [x] **Step 1: 更新失败测试**
 
 把 `test_sync_incremental.py` 中所有 `monkeypatch.setattr(market, ...)` 改为 `monkeypatch.setattr(registry, "discover_instruments", ...)` 和 `monkeypatch.setattr(registry, "fetch_klines", ...)`。
 
@@ -590,9 +590,9 @@ def test_ods_writes_native_raw_payload(dsn, sync_cleanup, monkeypatch):
     ...
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
-- [ ] **Step 3: 修改 sync_incremental.py**
+- [x] **Step 3: 修改 sync_incremental.py**
 
 把 `from etl.sources import market` 改为 `from etl.sources import registry`，并把两处 `market.` 改为 `registry.`。
 
@@ -613,9 +613,9 @@ ods_row.update({k: v for k, v in row.items() if k != "time"})
 
 FX 特殊处理移出 `sync_incremental.py`，改由 `frankfurter.py` 的 native 字段提供；`build_dwd.py` 的 `_map_ohlc` 需要改为优先从 `raw_payload`/native 字段读取 FX 的 `base/quote/rate`。若第一版保持兼容，也可保留现有 FX 映射，但不丢弃 native 字段。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add warehouse/etl/sync_incremental.py warehouse/tests/test_sync_incremental.py
