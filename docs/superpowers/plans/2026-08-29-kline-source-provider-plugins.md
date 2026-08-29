@@ -25,7 +25,7 @@
 - Create: `warehouse/etl/sources/common.py`
 - Test: `warehouse/tests/test_sources_common.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `warehouse/tests/test_sources_common.py`:
 
@@ -634,7 +634,7 @@ git commit -m "refactor: sync_incremental 改用 registry 并贴源写入 ODS"
 
 验证 `sync_daily.main` 调用 `registry.discover_instruments` 且不生成 mock。
 
-- [ ] **Step 2: 实现 sync_daily.py**
+- [x] **Step 2: 实现 sync_daily.py**
 
 ```python
 """Daily real-data warehouse sync entrypoint for cron or desktop automation."""
@@ -673,9 +673,9 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 3: 运行确认通过**
+- [x] **Step 3: 运行确认通过**
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add warehouse/etl/sync_daily.py warehouse/tests/test_sync_daily.py
