@@ -65,7 +65,8 @@ cd warehouse
 python -m etl.sync_daily
 ```
 
-首次运行（水位线为空）等价于全量装载；之后每次只处理新增数据。可用 cron 实现每日更新：
+首次运行（水位线为空）回溯近一年数据，避免 `eastmoney`、`frankfurter`、
+`yfinance` 等源覆盖历史不足造成缺口；之后每次只处理新增数据。可用 cron 实现每日更新：
 
 ```cron
 0 9 * * * cd /path/to/finresearch/warehouse && WAREHOUSE_DSN="$WAREHOUSE_DSN" .venv/bin/python -m etl.sync_daily && .venv/bin/python -m etl.sync_external

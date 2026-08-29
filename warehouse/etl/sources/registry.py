@@ -56,24 +56,32 @@ def enabled_sources(market: str, symbol: str) -> list[tuple[str, SourceFn]]:
 
 
 def fetch_klines(market, symbol, period="d", start=None, end=None, limit=1000):
+    rows, _ = fetch_klines_with_source(
+        market, symbol, period=period, start=start, end=end, limit=limit
+    )
+    return rows
+
+
+def fetch_klines_with_source(
+    market, symbol, period="d", start=None, end=None, limit=1000
+):
     chain = enabled_sources(market, symbol)
     source_names = ",".join(name for name, _ in chain)
-    key = f"{market}:{symbol}:{period}:{limit}:{source_names}"
+    key = (
+        f"{market}:{symbol}:{period}:{limit}:{source_names}:"
+        f"{start or ''}:{end or ''}"
+    )
     cached = cache_get(key)
     if cached is not None:
-        rows, _ = cached
-        if start:
-            rows = [r for r in rows if r["time"] >= start]
-        if end:
-            rows = [r for r in rows if r["time"] <= end]
-        return rows
+        rows, source = cached
+        return rows, source
 
     for name, fn in chain:
         rows = try_provider(name, key, fn, market, symbol, period, start, end, limit)
         if rows:
-            cache_set(key, rows, "live")
-            return rows
-    return []
+            cache_set(key, rows, name)
+            return rows, name
+    return [], None
 
 
 def discover_instruments(market: str) -> list[dict[str, Any]]:

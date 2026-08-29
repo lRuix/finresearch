@@ -17,3 +17,8 @@ def test_aggregate_weekly_groups_iso_week():
     assert result[0]["open"] == 1
     assert result[0]["close"] == 2.5
     assert result[0]["volume"] == 30
+
+
+def test_parse_fx_symbol_supports_yahoo_and_slash_forms():
+    assert common.parse_fx_symbol("USDCNY=X") == ("USD", "CNY")
+    assert common.parse_fx_symbol("EUR/USD") == ("EUR", "USD")

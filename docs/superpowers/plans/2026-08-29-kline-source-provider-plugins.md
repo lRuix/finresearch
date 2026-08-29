@@ -193,7 +193,7 @@ git commit -m "refactor: 抽取数据源公共基础设施"
 - Create: `warehouse/etl/sources/tencent.py`
 - Test: `warehouse/tests/test_sources_tencent.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `warehouse/tests/test_sources_tencent.py`:
 
@@ -218,12 +218,12 @@ def test_fetch_klines_parses_day_rows(monkeypatch):
     assert rows[0]["volume"] == 100
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sources_tencent.py -q`
 Expected: `ModuleNotFoundError`
 
-- [ ] **Step 3: 实现 tencent.py**
+- [x] **Step 3: 实现 tencent.py**
 
 `warehouse/etl/sources/tencent.py`:
 
@@ -296,12 +296,12 @@ def fetch_klines(market, symbol, period="d", start=None, end=None, limit=1000):
     return rows
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sources_tencent.py -q`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add warehouse/etl/sources/tencent.py warehouse/tests/test_sources_tencent.py
@@ -322,10 +322,10 @@ git commit -m "feat: 新增 tencent 独立数据源脚本"
 
 测试文件：`test_sources_naver.py`、`test_sources_gate.py`、`test_sources_binance.py`，分别 monkeypatch 各模块的 `get_json` / `get_text`。
 
-- [ ] **Step 1: 创建并运行三个源测试到失败**
-- [ ] **Step 2: 实现三个源脚本**
-- [ ] **Step 3: 运行测试到通过**
-- [ ] **Step 4: 分别提交**
+- [x] **Step 1: 创建并运行三个源测试到失败**
+- [x] **Step 2: 实现三个源脚本**
+- [x] **Step 3: 运行测试到通过**
+- [x] **Step 4: 分别提交**
 
 ```bash
 git add warehouse/etl/sources/naver.py warehouse/tests/test_sources_naver.py
@@ -350,10 +350,10 @@ git commit -m "feat: 新增 binance 独立数据源脚本"
 
 测试：`test_sources_frankfurter.py`、`test_sources_eastmoney.py`。
 
-- [ ] **Step 1: 创建并运行测试到失败**
-- [ ] **Step 2: 实现两个源脚本**
-- [ ] **Step 3: 运行测试到通过**
-- [ ] **Step 4: 分别提交**
+- [x] **Step 1: 创建并运行测试到失败**
+- [x] **Step 2: 实现两个源脚本**
+- [x] **Step 3: 运行测试到通过**
+- [x] **Step 4: 分别提交**
 
 ```bash
 git add warehouse/etl/sources/frankfurter.py warehouse/tests/test_sources_frankfurter.py
@@ -375,10 +375,10 @@ git commit -m "feat: 新增 eastmoney 独立数据源脚本"
 
 测试：`test_sources_yfinance.py`、`test_sources_akshare.py`，用 monkeypatch 替换 yfinance Ticker 与 akshare 接口。
 
-- [ ] **Step 1: 创建并运行测试到失败**
-- [ ] **Step 2: 实现两个源脚本**
-- [ ] **Step 3: 运行测试到通过**
-- [ ] **Step 4: 分别提交**
+- [x] **Step 1: 创建并运行测试到失败**
+- [x] **Step 2: 实现两个源脚本**
+- [x] **Step 3: 运行测试到通过**
+- [x] **Step 4: 分别提交**
 
 ```bash
 git add warehouse/etl/sources/yfinance.py warehouse/tests/test_sources_yfinance.py
@@ -396,7 +396,7 @@ git commit -m "feat: 新增 akshare 独立数据源脚本"
 - Create: `warehouse/etl/sources/discovery.py`
 - Test: `warehouse/tests/test_sources_discovery.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 from etl.sources import discovery
@@ -424,15 +424,15 @@ def test_discover_a_share_uses_akshare_spot(monkeypatch):
 
 注意：akshare 返回的是 pandas DataFrame，测试中应按现有 `_top_frame_candidates` 的 pandas 语义构造真实 DataFrame，而不是示例中的 `type` 伪对象。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
-- [ ] **Step 3: 实现 discovery.py**
+- [x] **Step 3: 实现 discovery.py**
 
 把 `market.py` 中的 `_top_frame_candidates`、`_a_share_candidates`、`_hk_candidates`、`_fund_candidates`、`_crypto_candidates`、`_discover_dynamic`、`discover_instruments` 原样迁移到 `discovery.py`，并删除下划线前缀。`discover_instruments` 保持原有缓存逻辑，依赖 `common.get_json`。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add warehouse/etl/sources/discovery.py warehouse/tests/test_sources_discovery.py
@@ -447,7 +447,7 @@ git commit -m "feat: 新增 discovery 独立发现脚本"
 - Create: `warehouse/etl/sources/registry.py`
 - Test: `warehouse/tests/test_sources_registry.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 from etl.sources import registry
@@ -477,9 +477,9 @@ def test_disabled_source_is_skipped(monkeypatch):
     assert "empty" not in names
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
-- [ ] **Step 3: 实现 registry.py**
+- [x] **Step 3: 实现 registry.py**
 
 `registry.py`:
 
@@ -561,9 +561,9 @@ def discover_instruments(market: str) -> list[dict[str, Any]]:
 
 注意：`fund` 源链需要 symbol，所以 `enabled_sources` 需要接收 symbol。实现时改为 `enabled_sources(market, symbol)`，`fetch_klines` 传入 symbol。测试同步调整。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add warehouse/etl/sources/registry.py warehouse/tests/test_sources_registry.py
@@ -630,7 +630,7 @@ git commit -m "refactor: sync_incremental 改用 registry 并贴源写入 ODS"
 - Create: `warehouse/etl/sync_daily.py`
 - Test: `warehouse/tests/test_sync_daily.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 验证 `sync_daily.main` 调用 `registry.discover_instruments` 且不生成 mock。
 

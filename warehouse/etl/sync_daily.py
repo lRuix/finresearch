@@ -10,22 +10,24 @@ from etl.universe import static_universe_for
 def main() -> int:
     original_discover = registry.discover_instruments
 
-    def static_or_dynamic(market: str):
-        static = static_universe_for(market)
-        if static:
-            return static
+    def dynamic_or_static(market: str):
         try:
-            return original_discover(market)
+            rows = original_discover(market)
         except Exception:
-            return []
+            rows = []
+        if rows:
+            return rows
+        return static_universe_for(market)
 
-    registry.discover_instruments = static_or_dynamic
+    registry.discover_instruments = dynamic_or_static
     try:
         from etl.sync_incremental import main as sync_main
 
         sync_main()
     except Exception:
         return 1
+    finally:
+        registry.discover_instruments = original_discover
     return 0
 
 

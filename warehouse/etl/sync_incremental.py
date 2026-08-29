@@ -24,6 +24,7 @@ from etl.migrate_seed import (
     DEFAULT_DSN,
 )
 from etl.sources import registry
+from etl.sources.common import parse_fx_symbol
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ KLINE_SCOPE_PREFIX = "kline:"
 NEWS_SCOPE = "news"
 MARKETS = ("a-share", "fund", "us", "kr", "hk", "fx", "crypto")
 REQUEST_DELAY_SECONDS = 0.15
-FIRST_SYNC_START = "2024-01-01"
+FIRST_SYNC_START = (date.today() - timedelta(days=365)).isoformat()
 
 
 def _scope_key(market: str, symbol: str, period: str) -> str:
@@ -106,17 +107,20 @@ def sync_incremental(
                     else FIRST_SYNC_START
                 )
                 try:
-                    rows = registry.fetch_klines(market_id, symbol, "d", start=start, end=today)
+                    rows, provider = registry.fetch_klines_with_source(
+                        market_id, symbol, "d", start=start, end=today
+                    )
                 except Exception as exc:  # noqa: BLE001 - 单标的失败跳过
                     logger.warning("fetch %s %s failed: %s", market_id, symbol, exc)
                     continue
                 time.sleep(REQUEST_DELAY_SECONDS)
-                if not rows:
+                if not rows or not provider:
                     continue
                 market_ods_rows: list[dict[str, Any]] = []
+                invalid_fx_symbol = False
                 for row in rows:
                     ods_row = {
-                        "provider": "market",
+                        "provider": provider,
                         "market": market_id,
                         "symbol": symbol,
                         "interval": "d",
@@ -126,10 +130,23 @@ def sync_incremental(
                     }
                     ods_row.update({key: value for key, value in row.items() if key != "time"})
                     if market_id == "fx":
+                        base_currency = row.get("base")
+                        quote_currency = row.get("quote")
+                        if not base_currency or not quote_currency:
+                            try:
+                                parsed_base, parsed_quote = parse_fx_symbol(symbol)
+                            except ValueError:
+                                invalid_fx_symbol = True
+                                break
+                            base_currency = base_currency or parsed_base
+                            quote_currency = quote_currency or parsed_quote
+                        if not base_currency or not quote_currency:
+                            invalid_fx_symbol = True
+                            break
                         ods_row.update(
                             {
-                                "base_currency": row.get("base"),
-                                "quote_currency": row.get("quote"),
+                                "base_currency": base_currency,
+                                "quote_currency": quote_currency,
                                 "close_rate": row.get("close", row.get("rate")),
                                 "prev_rate": None,
                                 "open_rate": row.get("open"),
@@ -138,9 +155,12 @@ def sync_incremental(
                             }
                         )
                     market_ods_rows.append(ods_row)
+                if invalid_fx_symbol or not market_ods_rows:
+                    logger.warning("skip %s %s: no valid fx symbol", market_id, symbol)
+                    continue
                 market_chunks.setdefault(market_id, []).extend(market_ods_rows)
                 try:
-                    ts = max(_parse_time(row["time"]) for row in rows)
+                    ts = max(_parse_time(row["ts"]) for row in market_ods_rows)
                 except (TypeError, ValueError):
                     continue
                 if key not in new_watermarks or ts > new_watermarks[key]:

@@ -44,6 +44,26 @@ def parse_ts(value):
     return parsed.astimezone(timezone.utc)
 
 
+def parse_fx_symbol(symbol: str) -> tuple[str, str]:
+    """Parse a Yahoo-style FX symbol like USDCNY=X or USD/CNY."""
+    text = str(symbol).strip().upper()
+    if "/" in text:
+        base, quote = text.split("/", 1)
+    else:
+        code = text.split("=", 1)[0]
+        if len(code) != 6 or not code.isalpha():
+            raise ValueError(f"cannot parse fx symbol: {symbol}")
+        base, quote = code[:3], code[3:]
+    if (
+        len(base) != 3
+        or len(quote) != 3
+        or not base.isalpha()
+        or not quote.isalpha()
+    ):
+        raise ValueError(f"cannot parse fx symbol: {symbol}")
+    return base, quote
+
+
 def aggregate_weekly(rows):
     groups: dict[tuple[int, int], list[dict]] = {}
     for row in rows:

@@ -37,7 +37,12 @@ def sync_cleanup(dsn):
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         symbols_by_market: dict[str, list[str]] = {}
+        providers_written: set[str] = set()
         for market_id, table in MARKET_TABLES.items():
+            cur.execute(
+                f"SELECT DISTINCT provider FROM {table} WHERE sync_batch_id LIKE 'test-sync-%'"
+            )
+            providers_written.update(row[0] for row in cur.fetchall())
             cur.execute(
                 f"SELECT DISTINCT symbol FROM {table} WHERE sync_batch_id LIKE 'test-sync-%'"
             )
@@ -49,11 +54,10 @@ def sync_cleanup(dsn):
             cur.execute(
                 """
                 DELETE FROM fact_kline
-                WHERE provider_id = 'market'
-                  AND instrument_id IN (
-                      SELECT instrument_id FROM dim_instrument
-                      WHERE market_id = %s AND symbol = ANY(%s)
-                  )
+                WHERE instrument_id IN (
+                    SELECT instrument_id FROM dim_instrument
+                    WHERE market_id = %s AND symbol = ANY(%s)
+                )
                 """,
                 (market_id, symbols),
             )
@@ -72,9 +76,9 @@ def sync_cleanup(dsn):
         cur.execute(
             """
             DELETE FROM dim_provider
-            WHERE provider_id = 'market' AND provider_id != ALL(%s)
+            WHERE provider_id = ANY(%s) AND provider_id != ALL(%s)
             """,
-            (list(before_providers),),
+            (list(providers_written), list(before_providers)),
         )
         cur.execute(
             "DELETE FROM dim_date WHERE date_key != ALL(%s)",
@@ -120,12 +124,15 @@ def _fake_market(a_share_symbol: str, rows: list[dict]):
             ]
         return []
 
-    def fetch(market_id: str, symbol: str, period: str, start=None, end=None):
+    def fetch_with_source(
+        market_id: str, symbol: str, period: str, start=None, end=None
+    ):
         if market_id != "a-share" or symbol != a_share_symbol:
-            return []
-        return [row for row in rows if start is None or row["time"] >= start]
+            return [], None
+        filtered = [row for row in rows if start is None or row["time"] >= start]
+        return filtered, "tencent"
 
-    return discover, fetch
+    return discover, fetch_with_source
 
 
 def _watermark(dsn: str, scope: str) -> str | None:
@@ -144,7 +151,7 @@ def test_first_run_collects_new_symbols(dsn, sync_cleanup, monkeypatch):
         a_share_symbol, [_kline_row("2026-08-01", 1.5), _kline_row("2026-08-02", 1.6)]
     )
     monkeypatch.setattr(registry, "discover_instruments", discover)
-    monkeypatch.setattr(registry, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "fetch_klines_with_source", fetch)
 
     stats = sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
 
@@ -155,7 +162,7 @@ def test_first_run_collects_new_symbols(dsn, sync_cleanup, monkeypatch):
             SELECT count(*)
             FROM fact_kline f
             JOIN dim_instrument i ON i.instrument_id = f.instrument_id
-            WHERE f.provider_id = 'market' AND i.symbol = %s
+            WHERE f.provider_id = 'tencent' AND i.symbol = %s
             """,
             (a_share_symbol,),
         )
@@ -170,7 +177,7 @@ def test_second_run_syncs_only_new_rows(dsn, sync_cleanup, monkeypatch):
     rows = [_kline_row("2026-08-01", 1.5), _kline_row("2026-08-02", 1.6)]
     discover, fetch = _fake_market(a_share_symbol, rows)
     monkeypatch.setattr(registry, "discover_instruments", discover)
-    monkeypatch.setattr(registry, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "fetch_klines_with_source", fetch)
 
     sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
 
@@ -184,7 +191,7 @@ def test_second_run_syncs_only_new_rows(dsn, sync_cleanup, monkeypatch):
             SELECT count(*)
             FROM fact_kline f
             JOIN dim_instrument i ON i.instrument_id = f.instrument_id
-            WHERE f.provider_id = 'market' AND i.symbol = %s
+            WHERE f.provider_id = 'tencent' AND i.symbol = %s
             """,
             (a_share_symbol,),
         )
@@ -232,11 +239,12 @@ def test_fx_rows_map_rate_fields(dsn, sync_cleanup, monkeypatch):
 
     def fetch(market_id: str, symbol: str, period: str, start=None, end=None):
         if market_id != "fx" or symbol != fx_symbol:
-            return []
-        return [row for row in rows if start is None or row["time"] >= start]
+            return [], None
+        filtered = [row for row in rows if start is None or row["time"] >= start]
+        return filtered, "frankfurter"
 
     monkeypatch.setattr(registry, "discover_instruments", discover)
-    monkeypatch.setattr(registry, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "fetch_klines_with_source", fetch)
 
     stats = sync_incremental(
         dsn, batch_id=f"test-sync-{uuid.uuid4()}", markets=("fx",)
@@ -248,7 +256,7 @@ def test_fx_rows_map_rate_fields(dsn, sync_cleanup, monkeypatch):
             """
             SELECT base_currency, quote_currency, close_rate, open_rate, high_rate, low_rate
             FROM ods_klines_fx
-            WHERE provider = 'market' AND symbol = %s
+            WHERE provider = 'frankfurter' AND symbol = %s
             ORDER BY ts
             """,
             (fx_symbol,),
@@ -261,18 +269,74 @@ def test_fx_rows_map_rate_fields(dsn, sync_cleanup, monkeypatch):
             SELECT count(*)
             FROM fact_kline f
             JOIN dim_instrument i ON i.instrument_id = f.instrument_id
-            WHERE f.provider_id = 'market' AND i.market_id = 'fx' AND i.symbol = %s
+            WHERE f.provider_id = 'frankfurter' AND i.market_id = 'fx' AND i.symbol = %s
             """,
             (fx_symbol,),
         )
         assert cur.fetchone()[0] == 2
 
 
+def test_fx_fallback_parses_base_and_quote_from_symbol(
+    dsn, sync_cleanup, monkeypatch
+):
+    fx_symbol = "USDCNY=X"
+    rows = [
+        {
+            "time": "2026-08-01",
+            "rate": 7.2,
+            "open": 7.1,
+            "high": 7.25,
+            "low": 7.05,
+            "close": 7.2,
+            "volume": 0.0,
+        }
+    ]
+
+    def discover(market_id: str) -> list[dict]:
+        if market_id == "fx":
+            return [
+                {
+                    "market": "fx",
+                    "symbol": fx_symbol,
+                    "name": "USD/CNY",
+                    "currency": "CNY",
+                }
+            ]
+        return []
+
+    def fetch_with_source(
+        market_id: str, symbol: str, period: str, start=None, end=None
+    ):
+        if market_id != "fx" or symbol != fx_symbol:
+            return [], None
+        filtered = [row for row in rows if start is None or row["time"] >= start]
+        return filtered, "yfinance"
+
+    monkeypatch.setattr(registry, "discover_instruments", discover)
+    monkeypatch.setattr(registry, "fetch_klines_with_source", fetch_with_source)
+
+    stats = sync_incremental(
+        dsn, batch_id=f"test-sync-{uuid.uuid4()}", markets=("fx",)
+    )
+
+    assert stats["klines"]["fx"]["ods"] == 1
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT provider, base_currency, quote_currency
+            FROM ods_klines_fx
+            WHERE symbol = %s
+            """,
+            (fx_symbol,),
+        )
+        assert cur.fetchone() == ("yfinance", "USD", "CNY")
+
+
 def test_failed_run_rolls_back_and_keeps_watermark(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
     discover, fetch = _fake_market(a_share_symbol, [_kline_row("2026-08-01", 1.5)])
     monkeypatch.setattr(registry, "discover_instruments", discover)
-    monkeypatch.setattr(registry, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "fetch_klines_with_source", fetch)
     sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
     before = _watermark(dsn, f"kline:a-share:{a_share_symbol}:d")
 
@@ -280,7 +344,7 @@ def test_failed_run_rolls_back_and_keeps_watermark(dsn, sync_cleanup, monkeypatc
         a_share_symbol, [_kline_row("2026-08-02", 1.6)]
     )
     monkeypatch.setattr(registry, "discover_instruments", discover2)
-    monkeypatch.setattr(registry, "fetch_klines", fetch2)
+    monkeypatch.setattr(registry, "fetch_klines_with_source", fetch2)
 
     def boom(*args, **kwargs):
         raise RuntimeError("dwd build failed")
@@ -296,7 +360,7 @@ def test_failed_run_rolls_back_and_keeps_watermark(dsn, sync_cleanup, monkeypatc
             SELECT count(*)
             FROM fact_kline f
             JOIN dim_instrument i ON i.instrument_id = f.instrument_id
-            WHERE f.provider_id = 'market' AND i.symbol = %s AND f.date_key = '2026-08-02'
+            WHERE f.provider_id = 'tencent' AND i.symbol = %s AND f.date_key = '2026-08-02'
             """,
             (a_share_symbol,),
         )
@@ -307,7 +371,7 @@ def test_news_incremental_loads_only_new_items(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
     discover, fetch = _fake_market(a_share_symbol, [_kline_row("2026-08-01", 1.5)])
     monkeypatch.setattr(registry, "discover_instruments", discover)
-    monkeypatch.setattr(registry, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "fetch_klines_with_source", fetch)
     suffix = uuid.uuid4().hex[:8]
     first_item = {
         "time": "08-01 09:00",
@@ -360,21 +424,22 @@ def test_ods_writes_native_raw_payload(dsn, sync_cleanup, monkeypatch):
 
     def fetch(market_id, sym, period="d", start=None, end=None, limit=1000):
         if market_id == "a-share" and sym == symbol:
-            return native
-        return []
+            return native, "tencent"
+        return [], None
 
     monkeypatch.setattr(registry, "discover_instruments", discover)
-    monkeypatch.setattr(registry, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "fetch_klines_with_source", fetch)
     sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}", markets=("a-share",))
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT amount, raw_payload FROM ods_klines_a_share WHERE symbol = %s",
+            "SELECT provider, amount, raw_payload FROM ods_klines_a_share WHERE symbol = %s",
             (symbol,),
         )
         row = cur.fetchone()
-    assert row[0] == 200.0
-    assert row[1]["source_specific"] == "keep-me"
+    assert row[0] == "tencent"
+    assert row[1] == 200.0
+    assert row[2]["source_specific"] == "keep-me"
 
 
 def test_upsert_ods_reuses_connection_transaction(dsn, sync_cleanup):
