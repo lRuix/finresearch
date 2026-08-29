@@ -10,7 +10,7 @@ import pytest
 from etl.load_ods import MARKET_TABLES, upsert_ods_rows
 from etl.migrate_seed import _new_batch_id
 from etl.sync_incremental import sync_incremental
-from etl.sources import market
+from etl.sources import registry
 from backend.infrastructure.datasources import macro_data
 
 
@@ -143,8 +143,8 @@ def test_first_run_collects_new_symbols(dsn, sync_cleanup, monkeypatch):
     discover, fetch = _fake_market(
         a_share_symbol, [_kline_row("2026-08-01", 1.5), _kline_row("2026-08-02", 1.6)]
     )
-    monkeypatch.setattr(market, "discover_instruments", discover)
-    monkeypatch.setattr(market, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "discover_instruments", discover)
+    monkeypatch.setattr(registry, "fetch_klines", fetch)
 
     stats = sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
 
@@ -169,8 +169,8 @@ def test_second_run_syncs_only_new_rows(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
     rows = [_kline_row("2026-08-01", 1.5), _kline_row("2026-08-02", 1.6)]
     discover, fetch = _fake_market(a_share_symbol, rows)
-    monkeypatch.setattr(market, "discover_instruments", discover)
-    monkeypatch.setattr(market, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "discover_instruments", discover)
+    monkeypatch.setattr(registry, "fetch_klines", fetch)
 
     sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
 
@@ -193,7 +193,30 @@ def test_second_run_syncs_only_new_rows(dsn, sync_cleanup, monkeypatch):
 
 def test_fx_rows_map_rate_fields(dsn, sync_cleanup, monkeypatch):
     fx_symbol = "USDCNY=X"
-    rows = [_kline_row("2026-08-01", 7.2), _kline_row("2026-08-02", 7.25)]
+    rows = [
+        {
+            "time": "2026-08-01",
+            "base": "USD",
+            "quote": "CNY",
+            "rate": 7.2,
+            "open": 1.0,
+            "high": 2.0,
+            "low": 0.5,
+            "close": 7.2,
+            "volume": 0.0,
+        },
+        {
+            "time": "2026-08-02",
+            "base": "USD",
+            "quote": "CNY",
+            "rate": 7.25,
+            "open": 1.0,
+            "high": 2.0,
+            "low": 0.5,
+            "close": 7.25,
+            "volume": 0.0,
+        },
+    ]
 
     def discover(market_id: str) -> list[dict]:
         if market_id == "fx":
@@ -212,8 +235,8 @@ def test_fx_rows_map_rate_fields(dsn, sync_cleanup, monkeypatch):
             return []
         return [row for row in rows if start is None or row["time"] >= start]
 
-    monkeypatch.setattr(market, "discover_instruments", discover)
-    monkeypatch.setattr(market, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "discover_instruments", discover)
+    monkeypatch.setattr(registry, "fetch_klines", fetch)
 
     stats = sync_incremental(
         dsn, batch_id=f"test-sync-{uuid.uuid4()}", markets=("fx",)
@@ -248,16 +271,16 @@ def test_fx_rows_map_rate_fields(dsn, sync_cleanup, monkeypatch):
 def test_failed_run_rolls_back_and_keeps_watermark(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
     discover, fetch = _fake_market(a_share_symbol, [_kline_row("2026-08-01", 1.5)])
-    monkeypatch.setattr(market, "discover_instruments", discover)
-    monkeypatch.setattr(market, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "discover_instruments", discover)
+    monkeypatch.setattr(registry, "fetch_klines", fetch)
     sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}")
     before = _watermark(dsn, f"kline:a-share:{a_share_symbol}:d")
 
     discover2, fetch2 = _fake_market(
         a_share_symbol, [_kline_row("2026-08-02", 1.6)]
     )
-    monkeypatch.setattr(market, "discover_instruments", discover2)
-    monkeypatch.setattr(market, "fetch_klines", fetch2)
+    monkeypatch.setattr(registry, "discover_instruments", discover2)
+    monkeypatch.setattr(registry, "fetch_klines", fetch2)
 
     def boom(*args, **kwargs):
         raise RuntimeError("dwd build failed")
@@ -283,8 +306,8 @@ def test_failed_run_rolls_back_and_keeps_watermark(dsn, sync_cleanup, monkeypatc
 def test_news_incremental_loads_only_new_items(dsn, sync_cleanup, monkeypatch):
     a_share_symbol = _unique_symbol()
     discover, fetch = _fake_market(a_share_symbol, [_kline_row("2026-08-01", 1.5)])
-    monkeypatch.setattr(market, "discover_instruments", discover)
-    monkeypatch.setattr(market, "fetch_klines", fetch)
+    monkeypatch.setattr(registry, "discover_instruments", discover)
+    monkeypatch.setattr(registry, "fetch_klines", fetch)
     suffix = uuid.uuid4().hex[:8]
     first_item = {
         "time": "08-01 09:00",
@@ -315,6 +338,43 @@ def test_news_incremental_loads_only_new_items(dsn, sync_cleanup, monkeypatch):
             ("TEST-NEWS-%",),
         )
         assert cur.fetchone()[0] == 2
+
+
+def test_ods_writes_native_raw_payload(dsn, sync_cleanup, monkeypatch):
+    symbol = _unique_symbol()
+    native = [{
+        "time": "2026-08-29",
+        "open": 1.0,
+        "high": 2.0,
+        "low": 0.5,
+        "close": 1.5,
+        "volume": 100.0,
+        "amount": 200.0,
+        "source_specific": "keep-me",
+    }]
+
+    def discover(market_id):
+        if market_id == "a-share":
+            return [{"symbol": symbol, "name": "T", "market": "a-share", "currency": "CNY"}]
+        return []
+
+    def fetch(market_id, sym, period="d", start=None, end=None, limit=1000):
+        if market_id == "a-share" and sym == symbol:
+            return native
+        return []
+
+    monkeypatch.setattr(registry, "discover_instruments", discover)
+    monkeypatch.setattr(registry, "fetch_klines", fetch)
+    sync_incremental(dsn, batch_id=f"test-sync-{uuid.uuid4()}", markets=("a-share",))
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT amount, raw_payload FROM ods_klines_a_share WHERE symbol = %s",
+            (symbol,),
+        )
+        row = cur.fetchone()
+    assert row[0] == 200.0
+    assert row[1]["source_specific"] == "keep-me"
 
 
 def test_upsert_ods_reuses_connection_transaction(dsn, sync_cleanup):

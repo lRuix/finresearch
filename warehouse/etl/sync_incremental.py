@@ -20,11 +20,10 @@ from etl.migrate_seed import (
     _new_batch_id,
     _news_items,
     _news_params,
-    _split_fx_currency,
     _upsert_news,
     DEFAULT_DSN,
 )
-from etl.sources import market
+from etl.sources import registry
 
 
 logger = logging.getLogger(__name__)
@@ -93,7 +92,7 @@ def sync_incremental(
         today = date.today().isoformat()
         for market_id in markets:
             try:
-                instruments = market.discover_instruments(market_id)
+                instruments = registry.discover_instruments(market_id)
             except Exception as exc:  # noqa: BLE001 - 市场发现失败跳过该市场
                 logger.warning("discover %s failed: %s", market_id, exc)
                 continue
@@ -107,7 +106,7 @@ def sync_incremental(
                     else FIRST_SYNC_START
                 )
                 try:
-                    rows = market.fetch_klines(market_id, symbol, "d", start=start, end=today)
+                    rows = registry.fetch_klines(market_id, symbol, "d", start=start, end=today)
                 except Exception as exc:  # noqa: BLE001 - 单标的失败跳过
                     logger.warning("fetch %s %s failed: %s", market_id, symbol, exc)
                     continue
@@ -122,37 +121,24 @@ def sync_incremental(
                         "symbol": symbol,
                         "interval": "d",
                         "ts": row["time"],
-                        "open": row["open"],
-                        "high": row["high"],
-                        "low": row["low"],
-                        "close": row["close"],
-                        "volume": row["volume"],
-                        "raw_payload": {},
+                        "raw_payload": row,
                         "sync_batch_id": batch_id,
                     }
+                    ods_row.update({key: value for key, value in row.items() if key != "time"})
                     if market_id == "fx":
-                        base_currency, quote_currency = _split_fx_currency(symbol)
-                        if base_currency is None or quote_currency is None:
-                            logger.warning(
-                                "Skipping fx kline symbol=%s ts=%s: cannot parse currency pair",
-                                symbol,
-                                row["time"],
-                            )
-                            continue
                         ods_row.update(
                             {
-                                "base_currency": base_currency,
-                                "quote_currency": quote_currency,
-                                "close_rate": row["close"],
+                                "base_currency": row.get("base"),
+                                "quote_currency": row.get("quote"),
+                                "close_rate": row.get("close", row.get("rate")),
                                 "prev_rate": None,
-                                "open_rate": row["open"],
-                                "high_rate": row["high"],
-                                "low_rate": row["low"],
+                                "open_rate": row.get("open"),
+                                "high_rate": row.get("high"),
+                                "low_rate": row.get("low"),
                             }
                         )
                     market_ods_rows.append(ods_row)
-                ods_rows = market_ods_rows
-                market_chunks.setdefault(market_id, []).extend(ods_rows)
+                market_chunks.setdefault(market_id, []).extend(market_ods_rows)
                 try:
                     ts = max(_parse_time(row["time"]) for row in rows)
                 except (TypeError, ValueError):
