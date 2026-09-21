@@ -177,6 +177,33 @@ def _rewind_metrics_watermark(conn: Any, earliest_change: str) -> None:
         set_watermark(conn, METRICS_SCOPE, earliest_change)
 
 
+def _new_change_dates(conn: Any, rows: list[dict[str, Any]]) -> set[str]:
+    """返回 rows 中表内尚不存在的变更日期集合（本次真正新增/回填）。
+
+    全市场每周重抓完整变更历史，rows 含大量已存在记录；回退目标只能取
+    本次新增的最小日期，否则会把派生指标水位线打到远古上市日。
+    """
+    pairs = {(row["symbol"], row["change_date"]) for row in rows}
+    if not pairs:
+        return set()
+    existing: set[tuple[str, str]] = set()
+    pair_list = list(pairs)
+    with conn.cursor() as cur:
+        for start in range(0, len(pair_list), 500):
+            chunk = pair_list[start : start + 500]
+            placeholders = ", ".join("(%s, %s)" for _ in chunk)
+            params: list[Any] = []
+            for symbol, change_date in chunk:
+                params.extend((symbol, change_date))
+            cur.execute(
+                f"SELECT symbol, change_date FROM ods_cn_share_structure "
+                f"WHERE (symbol, change_date) IN ({placeholders})",
+                params,
+            )
+            existing.update((row[0], row[1]) for row in cur.fetchall())
+    return {change_date for symbol, change_date in pairs if (symbol, change_date) not in existing}
+
+
 def _a_share_universe() -> list[str]:
     """全 A 股 6 位代码清单。改用 akshare 代码表而非东财快照（后者当前不可用）。"""
     import akshare  # lazy: heavy dependency
@@ -234,8 +261,10 @@ def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
         )
         set_watermark(conn, scope, week)
     if rows:
+        new_dates = _new_change_dates(conn, rows)
         upsert_external_rows(conn, "cn_share_structure", rows)
-        _rewind_metrics_watermark(conn, min(row["change_date"] for row in rows))
+        if new_dates:
+            _rewind_metrics_watermark(conn, min(new_dates))
     return {"rows": len(rows), "failed": failed}
 
 

@@ -264,3 +264,45 @@ def test_sync_share_structure_rewinds_metrics_watermark_on_backfill(
     with connect(dsn) as conn:
         # 股本变更日期早于已处理区间，水位线必须回退以重算
         assert get_watermark(conn, METRICS_SCOPE) == "2026-05-28"
+
+
+def test_sync_share_structure_rewinds_to_new_backfill_not_existing_history(
+    dsn, cleanup_external_sync, monkeypatch
+):
+    from etl.sources import eastmoney_cn
+    from etl.sync_external import METRICS_SCOPE, set_watermark, sync_share_structure
+
+    monkeypatch.setattr("etl.sync_external._a_share_universe", lambda: ["600519"])
+
+    # 表中已有一条远古记录：本次全量重抓仍会返回它，但不该把水位线打回远古
+    with connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO ods_cn_share_structure
+              (symbol, change_date, total_shares, float_shares, raw_payload, sync_batch_id)
+            VALUES ('600519', '1990-01-01', 100, 100, '{}', 'test-extsync-preseed')
+            ON CONFLICT DO NOTHING
+            """
+        )
+        conn.commit()
+
+    monkeypatch.setattr(
+        eastmoney_cn,
+        "fetch_share_structure",
+        lambda _code: [
+            {"变更日期": "1990-01-01", "总股本": 100, "已流通股份": 100},
+            {"变更日期": "2026-05-28", "总股本": 1250081601, "已流通股份": 1250081601},
+        ],
+    )
+
+    with connect(dsn) as conn:
+        set_watermark(conn, METRICS_SCOPE, "2026-09-01")
+        conn.commit()
+
+    with connect(dsn) as conn:
+        sync_share_structure(conn, batch_id=f"test-extsync-{uuid.uuid4()}")
+        conn.commit()
+
+    with connect(dsn) as conn:
+        # 回退目标应是本次新增的 2026-05-28，而非已存在的远古 1990-01-01
+        assert get_watermark(conn, METRICS_SCOPE) == "2026-05-28"
