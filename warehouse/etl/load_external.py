@@ -90,6 +90,30 @@ EXTERNAL_TABLES: dict[str, dict[str, Any]] = {
             "sync_batch_id",
         ],
     },
+    "cn_balance": {
+        "table": "ods_cn_balance",
+        "key": ["symbol", "report_date", "indicator_name"],
+        "columns": [
+            "symbol",
+            "report_date",
+            "indicator_name",
+            "indicator_value",
+            "raw_payload",
+            "sync_batch_id",
+        ],
+    },
+    "cn_share_structure": {
+        "table": "ods_cn_share_structure",
+        "key": ["symbol", "change_date"],
+        "columns": [
+            "symbol",
+            "change_date",
+            "total_shares",
+            "float_shares",
+            "raw_payload",
+            "sync_batch_id",
+        ],
+    },
 }
 
 

@@ -10,7 +10,7 @@ from etl.build_indicator import build_indicators
 from etl.db import connect
 from etl.load_external import upsert_external_rows
 from etl.migrate_seed import _new_batch_id, DEFAULT_DSN
-from etl.sources import akshare_cn, coingecko, sec_edgar, worldbank
+from etl.sources import akshare_cn, coingecko, eastmoney_cn, sec_edgar, sina_cn, worldbank
 
 
 logger = logging.getLogger(__name__)
@@ -164,6 +164,81 @@ def sync_akshare(conn: Any, batch_id: str) -> dict[str, Any]:
     return {"finance": len(finance_rows), "lhb": len(lhb_rows)}
 
 
+METRICS_SCOPE = "cn-daily:metrics"
+
+
+def _rewind_metrics_watermark(conn: Any, earliest_change: str) -> None:
+    """股本回填历史日期时回退派生指标水位线，强制重算受影响区间。
+
+    否则该区间内的市值/换手率会沿用变更前的股本，静默算错。
+    """
+    last = get_watermark(conn, METRICS_SCOPE)
+    if last is None or earliest_change < last:
+        set_watermark(conn, METRICS_SCOPE, earliest_change)
+
+
+def _a_share_universe() -> list[str]:
+    """全 A 股 6 位代码清单。改用 akshare 代码表而非东财快照（后者当前不可用）。"""
+    import akshare  # lazy: heavy dependency
+
+    frame = akshare.stock_info_a_code_name()
+    return [str(code).strip() for code in frame["code"].tolist()]
+
+
+def sync_balance_sheet(conn: Any, batch_id: str) -> dict[str, Any]:
+    week = iso_week()
+    rows: list[dict[str, Any]] = []
+    failed = 0
+    for symbol in _a_share_universe():
+        scope = f"cn-balance:{symbol}"
+        if get_watermark(conn, scope) == week:
+            continue
+        try:
+            parsed = list(
+                sina_cn.parse_balance_sheet(sina_cn.fetch_balance_sheet(symbol), symbol)
+            )
+        except Exception as exc:  # noqa: BLE001 - 单只失败不阻塞全市场
+            failed += 1
+            logger.warning("balance sheet failed for %s: %s", symbol, exc)
+            continue
+        rows.extend(
+            {**row, "raw_payload": {}, "sync_batch_id": batch_id} for row in parsed
+        )
+        set_watermark(conn, scope, week)
+    if rows:
+        upsert_external_rows(conn, "cn_balance", rows)
+        build_indicators(conn, "cn-balance")
+    return {"rows": len(rows), "failed": failed}
+
+
+def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
+    week = iso_week()
+    rows: list[dict[str, Any]] = []
+    failed = 0
+    for symbol in _a_share_universe():
+        scope = f"cn-share:{symbol}"
+        if get_watermark(conn, scope) == week:
+            continue
+        try:
+            parsed = list(
+                eastmoney_cn.parse_share_structure(
+                    eastmoney_cn.fetch_share_structure(symbol), symbol
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - 单只失败不阻塞全市场
+            failed += 1
+            logger.warning("share structure failed for %s: %s", symbol, exc)
+            continue
+        rows.extend(
+            {**row, "raw_payload": {}, "sync_batch_id": batch_id} for row in parsed
+        )
+        set_watermark(conn, scope, week)
+    if rows:
+        upsert_external_rows(conn, "cn_share_structure", rows)
+        _rewind_metrics_watermark(conn, min(row["change_date"] for row in rows))
+    return {"rows": len(rows), "failed": failed}
+
+
 def sync_external(dsn: str, batch_id: str | None = None) -> dict[str, Any]:
     batch_id = batch_id or _new_batch_id()
     stats = {
@@ -171,6 +246,8 @@ def sync_external(dsn: str, batch_id: str | None = None) -> dict[str, Any]:
         "sec": _run_source(dsn, batch_id, sync_sec),
         "worldbank": _run_source(dsn, batch_id, sync_worldbank),
         "akshare": _run_source(dsn, batch_id, sync_akshare),
+        "cn-balance": _run_source(dsn, batch_id, sync_balance_sheet),
+        "cn-share": _run_source(dsn, batch_id, sync_share_structure),
     }
     with connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("REFRESH MATERIALIZED VIEW dws_indicator_daily")

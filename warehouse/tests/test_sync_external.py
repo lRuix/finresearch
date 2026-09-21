@@ -27,20 +27,22 @@ def cleanup_external_sync(dsn):
             "ods_macro_indicators",
             "ods_cn_financials",
             "ods_cn_lhb",
+            "ods_cn_balance",
+            "ods_cn_share_structure",
         ):
             cur.execute(f"DELETE FROM {table} WHERE sync_batch_id LIKE 'test-extsync-%'")
         cur.execute(
             """
             DELETE FROM fact_indicator WHERE indicator_id IN (
               SELECT indicator_id FROM dim_indicator
-              WHERE source IN ('crypto','macro','sec','cn-finance','cn-lhb')
+              WHERE source IN ('crypto','macro','sec','cn-finance','cn-lhb','cn-balance','cn-daily')
             )
             """
         )
         cur.execute(
             """
             DELETE FROM dim_indicator
-            WHERE source IN ('crypto','macro','sec','cn-finance','cn-lhb')
+            WHERE source IN ('crypto','macro','sec','cn-finance','cn-lhb','cn-balance','cn-daily')
             """
         )
         cur.execute(
@@ -48,6 +50,8 @@ def cleanup_external_sync(dsn):
             DELETE FROM etl_watermarks
             WHERE scope LIKE 'coingecko:%' OR scope LIKE 'sec:%'
                OR scope LIKE 'worldbank:%' OR scope LIKE 'akshare:%'
+               OR scope LIKE 'cn-balance:%' OR scope LIKE 'cn-share:%'
+               OR scope = 'cn-daily:metrics'
             """
         )
         conn.commit()
@@ -103,6 +107,7 @@ def test_sync_external_failed_source_does_not_block_others(
         raise RuntimeError("network down")
 
     monkeypatch.setattr(worldbank, "fetch_indicator", boom)
+    monkeypatch.setattr("etl.sync_external._a_share_universe", lambda: [])
     stats = sync_external(dsn, batch_id=f"test-extsync-{uuid.uuid4()}")
     assert stats["coingecko"]["status"] == "ok"
     assert stats["worldbank"]["status"] == "error"
@@ -121,6 +126,7 @@ def test_sync_external_refreshes_indicator_dws(dsn, cleanup_external_sync, monke
 
     monkeypatch.setattr(sec_edgar, "fetch_submissions", lambda _cik: {"cik": _cik, "name": "X", "tickers": [], "exchanges": []})
     monkeypatch.setattr(sec_edgar, "fetch_company_facts", _no_sec)
+    monkeypatch.setattr("etl.sync_external._a_share_universe", lambda: [])
 
     sync_external(dsn, batch_id=f"test-extsync-{uuid.uuid4()}")
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
@@ -205,3 +211,56 @@ def test_sync_worldbank_resyncs_when_watermark_is_stale(
     with connect(dsn) as conn:
         for scope in scopes:
             assert get_watermark(conn, scope) == expected  # 水位线被推进到当前周
+
+
+def test_sync_balance_sheet_tolerates_single_symbol_failure(
+    dsn, cleanup_external_sync, monkeypatch
+):
+    from etl.sources import sina_cn
+    from etl.sync_external import sync_balance_sheet
+
+    monkeypatch.setattr(
+        "etl.sync_external._a_share_universe", lambda: ["600519", "000001"]
+    )
+
+    def _fetch(code: str) -> list[dict]:
+        if code == "000001":
+            raise RuntimeError("network down")
+        return [{"报告日": "20260630", "资产总计": 100.0}]
+
+    monkeypatch.setattr(sina_cn, "fetch_balance_sheet", _fetch)
+
+    with connect(dsn) as conn:
+        stats = sync_balance_sheet(conn, batch_id=f"test-extsync-{uuid.uuid4()}")
+        conn.commit()
+
+    assert stats["rows"] == 1
+    assert stats["failed"] == 1  # 000001 失败但不影响 600519
+
+
+def test_sync_share_structure_rewinds_metrics_watermark_on_backfill(
+    dsn, cleanup_external_sync, monkeypatch
+):
+    from etl.sources import eastmoney_cn
+    from etl.sync_external import METRICS_SCOPE, set_watermark, sync_share_structure
+
+    monkeypatch.setattr("etl.sync_external._a_share_universe", lambda: ["600519"])
+    monkeypatch.setattr(
+        eastmoney_cn,
+        "fetch_share_structure",
+        lambda _code: [
+            {"变更日期": "2026-05-28", "总股本": 1250081601, "已流通股份": 1250081601}
+        ],
+    )
+
+    with connect(dsn) as conn:
+        set_watermark(conn, METRICS_SCOPE, "2026-09-01")
+        conn.commit()
+
+    with connect(dsn) as conn:
+        sync_share_structure(conn, batch_id=f"test-extsync-{uuid.uuid4()}")
+        conn.commit()
+
+    with connect(dsn) as conn:
+        # 股本变更日期早于已处理区间，水位线必须回退以重算
+        assert get_watermark(conn, METRICS_SCOPE) == "2026-05-28"

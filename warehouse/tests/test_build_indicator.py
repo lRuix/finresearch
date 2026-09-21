@@ -7,6 +7,7 @@ import psycopg
 import pytest
 
 from etl.build_indicator import build_indicators
+from etl.db import connect
 from etl.load_external import upsert_external_rows
 
 
@@ -21,11 +22,15 @@ def cleanup_indicator(dsn):
         cur.execute(
             """
             DELETE FROM fact_indicator WHERE indicator_id IN (
-              SELECT indicator_id FROM dim_indicator WHERE source = 'crypto'
+              SELECT indicator_id FROM dim_indicator
+              WHERE source IN ('crypto','cn-balance','cn-daily')
             )
             """
         )
-        cur.execute("DELETE FROM dim_indicator WHERE source = 'crypto'")
+        cur.execute(
+            "DELETE FROM dim_indicator WHERE source IN ('crypto','cn-balance','cn-daily')"
+        )
+        cur.execute("DELETE FROM ods_cn_balance WHERE sync_batch_id LIKE 'test-%'")
         conn.commit()
 
 
@@ -83,3 +88,36 @@ def test_build_indicators_is_idempotent(dsn, cleanup_indicator):
         assert cur.fetchone()[0] == 3
         cur.execute("SELECT count(*) FROM fact_indicator")
         assert cur.fetchone()[0] == 3
+
+
+def test_build_indicators_reads_cn_balance(dsn, cleanup_indicator):
+    import psycopg
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO ods_cn_balance
+              (symbol, report_date, indicator_name, indicator_value, raw_payload, sync_batch_id)
+            VALUES ('600519', '2026-06-30', '总资产', 309050784569.31, '{}', 'test-bi-balance')
+            ON CONFLICT DO NOTHING
+            """
+        )
+        conn.commit()
+
+    with connect(dsn) as conn:
+        affected = build_indicators(conn, "cn-balance")
+        conn.commit()
+    assert affected >= 1
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*) FROM fact_indicator f
+            JOIN dim_indicator d ON d.indicator_id = f.indicator_id
+            WHERE d.source = 'cn-balance' AND d.name = '总资产'
+              AND f.ref_key = '600519' AND f.value = 309050784569.31
+            """
+        )
+        assert cur.fetchone()[0] == 1
+        cur.execute("DELETE FROM ods_cn_balance WHERE sync_batch_id = 'test-bi-balance'")
+        conn.commit()

@@ -75,6 +75,21 @@ def _iter_rows(cur: Any, source: str) -> Iterator[tuple[str, str, str | None, st
             period = row["report_date"]
             value = row["indicator_value"]
             yield name, name, None, symbol, _parse_date(period), value
+    elif source == "cn-balance":
+        cur.execute(
+            """
+            SELECT indicator_name, symbol, report_date, indicator_value
+            FROM ods_cn_balance
+            """
+        )
+        for row in cur.fetchall():
+            name = row["indicator_name"]
+            symbol = row["symbol"]
+            period = row["report_date"]
+            value = row["indicator_value"]
+            if value is None:
+                continue
+            yield name, name, "CNY", symbol, _parse_date(period), value
     elif source == "cn-lhb":
         cur.execute(
             "SELECT code, trade_date, close_price, change_pct FROM ods_cn_lhb"

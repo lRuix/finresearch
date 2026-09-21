@@ -227,3 +227,25 @@ CREATE TABLE IF NOT EXISTS ods_cn_lhb (
   sync_batch_id TEXT NOT NULL,
   PRIMARY KEY (trade_date, code, reason)
 );
+
+CREATE TABLE IF NOT EXISTS ods_cn_balance (
+  symbol TEXT NOT NULL,
+  report_date TEXT NOT NULL,
+  indicator_name TEXT NOT NULL,
+  indicator_value DOUBLE PRECISION,
+  raw_payload JSONB NOT NULL DEFAULT '{}',
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_batch_id TEXT NOT NULL,
+  PRIMARY KEY (symbol, report_date, indicator_name)
+);
+
+CREATE TABLE IF NOT EXISTS ods_cn_share_structure (
+  symbol TEXT NOT NULL,
+  change_date TEXT NOT NULL,
+  total_shares DOUBLE PRECISION,
+  float_shares DOUBLE PRECISION,
+  raw_payload JSONB NOT NULL DEFAULT '{}',
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_batch_id TEXT NOT NULL,
+  PRIMARY KEY (symbol, change_date)
+);
