@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 所有测试与命令在 `warehouse/` 目录下执行；该目录**没有** `.venv`，必须使用 `../backend/.venv/bin/python`。
+- 所有测试与命令在 `warehouse/` 目录下执行；该目录**没有** `.venv`，必须使用 `/Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python`。
 - 测试库为 `warehouse_test`，真实库为 `warehouse`。DDL 变更必须**同时**应用到两个库。
 - **测试 fixture 必须使用真实响应形状**（带单位字符串、NaN 列、真实中文列名）。禁止使用简化过的纯数字 mock——本项目已因此发生过一次严重逃逸。
 - 解析失败一律**跳过**，不写 0、不写 NaN。
@@ -132,7 +132,7 @@ def test_parse_balance_sheet_skips_malformed_report_date():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_sources_sina_cn.py -q`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sources_sina_cn.py -q`
 
 Expected: FAIL — `ModuleNotFoundError: No module named 'etl.sources.sina_cn'`
 
@@ -218,7 +218,7 @@ def parse_balance_sheet(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_sources_sina_cn.py -q`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sources_sina_cn.py -q`
 
 Expected: `5 passed`
 
@@ -319,7 +319,7 @@ def test_parse_share_structure_skips_missing_change_date():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_sources_eastmoney_cn.py -q`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sources_eastmoney_cn.py -q`
 
 Expected: FAIL — `ModuleNotFoundError: No module named 'etl.sources.eastmoney_cn'`
 
@@ -376,7 +376,7 @@ def parse_share_structure(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_sources_eastmoney_cn.py -q`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sources_eastmoney_cn.py -q`
 
 Expected: `4 passed`
 
@@ -455,7 +455,7 @@ from etl.sync_external import (
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_sync_external.py -q -k "iso_week or same_week"`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sync_external.py -q -k "iso_week or same_week"`
 
 Expected: FAIL — `ImportError: cannot import name 'iso_week'`
 
@@ -510,7 +510,7 @@ def iso_week(today: date | None = None) -> str:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_sync_external.py -q`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sync_external.py -q`
 
 Expected: 全部通过（含既有的 5 个测试，无回归）
 
@@ -580,6 +580,71 @@ docker exec -i warehouse-db-1 psql -U warehouse -d warehouse_test -v ON_ERROR_ST
 ```
 
 验证：`docker exec warehouse-db-1 psql -U warehouse -d warehouse_test -c "\dt ods_cn_*"` 应列出 `ods_cn_balance` 与 `ods_cn_share_structure`。
+
+**同时必须扩展两个既有测试夹具**（否则新 source 的指标会残留在测试库，导致既有测试 `test_sync_external_refreshes_indicator_dws` 因 `dws_indicator_daily` 行数变化而失败）：
+
+`warehouse/tests/test_build_indicator.py` 的 `cleanup_indicator` 夹具，把清理范围从只有 `'crypto'` 扩为：
+
+```python
+        cur.execute(
+            """
+            DELETE FROM fact_indicator WHERE indicator_id IN (
+              SELECT indicator_id FROM dim_indicator
+              WHERE source IN ('crypto','cn-balance','cn-daily')
+            )
+            """
+        )
+        cur.execute(
+            "DELETE FROM dim_indicator WHERE source IN ('crypto','cn-balance','cn-daily')"
+        )
+        cur.execute("DELETE FROM ods_cn_balance WHERE sync_batch_id LIKE 'test-%'")
+        cur.execute("DELETE FROM ods_cn_daily_metrics WHERE sync_batch_id LIKE 'test-%'")
+```
+
+`warehouse/tests/test_sync_external.py` 的 `cleanup_external_sync` 夹具，把新表与新 source 加进去：
+
+```python
+        for table in (
+            "ods_crypto_meta",
+            "ods_sec_submissions",
+            "ods_sec_facts",
+            "ods_macro_indicators",
+            "ods_cn_financials",
+            "ods_cn_lhb",
+            "ods_cn_balance",
+            "ods_cn_share_structure",
+            "ods_cn_daily_metrics",
+        ):
+            cur.execute(f"DELETE FROM {table} WHERE sync_batch_id LIKE 'test-extsync-%'")
+        cur.execute(
+            """
+            DELETE FROM fact_indicator WHERE indicator_id IN (
+              SELECT indicator_id FROM dim_indicator
+              WHERE source IN ('crypto','macro','sec','cn-finance','cn-lhb','cn-balance','cn-daily')
+            )
+            """
+        )
+        cur.execute(
+            """
+            DELETE FROM dim_indicator
+            WHERE source IN ('crypto','macro','sec','cn-finance','cn-lhb','cn-balance','cn-daily')
+            """
+        )
+        cur.execute(
+            """
+            DELETE FROM etl_watermarks
+            WHERE scope LIKE 'coingecko:%' OR scope LIKE 'sec:%'
+               OR scope LIKE 'worldbank:%' OR scope LIKE 'akshare:%'
+               OR scope LIKE 'cn-balance:%' OR scope LIKE 'cn-share:%'
+               OR scope = 'cn-daily:metrics'
+            """
+        )
+```
+
+注意两点：
+
+- `ods_cn_daily_metrics` 表要到 Task 5 才创建。**本次不要把它写进上面的 `table` 循环**（会报表不存在），Task 5 会补。同理 `test_build_indicator.py` 里对 `ods_cn_daily_metrics` 的删除语句也留到 Task 5 再加。
+- `cn-daily` source 此时尚无数据，但先写进 source 列表无害。
 
 - [ ] **Step 2: Write the failing test**
 
@@ -677,7 +742,7 @@ def test_sync_share_structure_rewinds_metrics_watermark_on_backfill(
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_build_indicator.py tests/test_sync_external.py -q -k "balance"`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_build_indicator.py tests/test_sync_external.py -q -k "balance"`
 
 Expected: FAIL — `ImportError: cannot import name 'sync_balance_sheet'`
 
@@ -831,7 +896,7 @@ def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_build_indicator.py tests/test_sync_external.py -q`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_build_indicator.py tests/test_sync_external.py -q`
 
 Expected: 全部通过
 
@@ -898,6 +963,11 @@ docker exec -i warehouse-db-1 psql -U warehouse -d warehouse -v ON_ERROR_STOP=1 
 docker exec -i warehouse-db-1 psql -U warehouse -d warehouse_test -v ON_ERROR_STOP=1 -q < warehouse/models/02_ods.sql
 ```
 
+**补齐 Task 4 预留的夹具**：现在 `ods_cn_daily_metrics` 已存在，把它的清理补进两个夹具：
+
+- `warehouse/tests/test_sync_external.py` 的 `cleanup_external_sync`：在 `table` 元组中加入 `"ods_cn_daily_metrics"`。
+- `warehouse/tests/test_build_indicator.py` 的 `cleanup_indicator`：加入 `cur.execute("DELETE FROM ods_cn_daily_metrics WHERE sync_batch_id LIKE 'test-%'")`。
+
 - [ ] **Step 2: Write the failing test**
 
 创建 `warehouse/tests/test_build_daily_metrics.py`：
@@ -958,7 +1028,7 @@ def test_compute_rows_leaves_turnover_null_when_float_shares_missing():
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_build_daily_metrics.py -q`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_build_daily_metrics.py -q`
 
 Expected: FAIL — `ModuleNotFoundError: No module named 'etl.build_daily_metrics'`
 
@@ -1133,13 +1203,13 @@ if __name__ == "__main__":
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests/test_build_daily_metrics.py -q`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_build_daily_metrics.py -q`
 
 Expected: `6 passed`
 
 - [ ] **Step 6: Run full suite**
 
-Run: `cd warehouse && ../backend/.venv/bin/python -m pytest tests -q`
+Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests -q`
 
 Expected: 全部通过，无回归
 
@@ -1169,7 +1239,7 @@ git commit -m "feat: 由 K 线与股本派生换手率与总市值
 Run:
 
 ```bash
-cd warehouse && WAREHOUSE_DSN="postgresql://warehouse:warehouse@127.0.0.1:5432/warehouse" ../backend/.venv/bin/python -m etl.sync_external
+cd warehouse && WAREHOUSE_DSN="postgresql://warehouse:warehouse@127.0.0.1:5432/warehouse" /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m etl.sync_external
 ```
 
 Expected: `cn-balance` 与 `cn-share` 均为 `status: ok`；`cn-balance` 行数达到 1 万量级（5565 只 × 若干报告期）。其余源的状态不影响本任务验收（coingecko 已知会超时）。
@@ -1179,7 +1249,7 @@ Expected: `cn-balance` 与 `cn-share` 均为 `status: ok`；`cn-balance` 行数�
 Run:
 
 ```bash
-cd warehouse && WAREHOUSE_DSN="postgresql://warehouse:warehouse@127.0.0.1:5432/warehouse" ../backend/.venv/bin/python -m etl.build_daily_metrics
+cd warehouse && WAREHOUSE_DSN="postgresql://warehouse:warehouse@127.0.0.1:5432/warehouse" /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m etl.build_daily_metrics
 ```
 
 Expected: 输出 `{'rows': <大数>, 'through': '<最新交易日>'}`
@@ -1246,7 +1316,7 @@ Expected: 总市值约 `1.5e12` 量级（1.5 万亿），换手率在 `0.05 ~ 2`
 
 - [ ] **Step 7: 全量测试套件**
 
-Run: `cd warehouse && WAREHOUSE_DSN="postgresql://warehouse:warehouse@127.0.0.1:5432/warehouse_test" ../backend/.venv/bin/python -m pytest tests -q`
+Run: `cd warehouse && WAREHOUSE_DSN="postgresql://warehouse:warehouse@127.0.0.1:5432/warehouse_test" /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests -q`
 
 Expected: 全部通过，无回归
 
