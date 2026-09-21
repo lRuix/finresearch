@@ -36,6 +36,12 @@ def set_watermark(conn: Any, scope: str, value: str) -> None:
         )
 
 
+def iso_week(today: date | None = None) -> str:
+    """返回 ISO 周标识，如 '2026-W39'，用作周粒度的水位线值。"""
+    iso = (today or date.today()).isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
+
+
 def _run_source(
     dsn: str, batch_id: str, fn: Callable[[Any, str], dict[str, Any]]
 ) -> dict[str, Any]:
@@ -71,9 +77,10 @@ def sync_sec(conn: Any, batch_id: str) -> dict[str, Any]:
     ciks = ["0000320193", "0001045810", "0000789019", "0001318605"]  # AAPL NVDA MSFT TSLA
     submissions_rows = []
     facts_rows = []
+    week = iso_week()
     for cik in ciks:
         scope = f"sec:cik:{cik}"
-        if get_watermark(conn, scope) is not None:
+        if get_watermark(conn, scope) == week:
             continue
         submissions_rows.append(
             {
@@ -86,7 +93,7 @@ def sync_sec(conn: Any, batch_id: str) -> dict[str, Any]:
             {**row, "raw_payload": {}, "sync_batch_id": batch_id}
             for row in sec_edgar.parse_facts(sec_edgar.fetch_company_facts(cik))
         )
-        set_watermark(conn, scope, date.today().isoformat())
+        set_watermark(conn, scope, week)
     if submissions_rows:
         upsert_external_rows(conn, "sec_submissions", submissions_rows)
     if facts_rows:
@@ -98,15 +105,16 @@ def sync_sec(conn: Any, batch_id: str) -> dict[str, Any]:
 def sync_worldbank(conn: Any, batch_id: str) -> dict[str, Any]:
     indicators = ["NY.GDP.MKTP.CD", "FP.CPI.TOTL.ZG", "FR.INR.LEND"]
     rows = []
+    week = iso_week()
     for code in indicators:
         scope = f"worldbank:series:{code}"
-        if get_watermark(conn, scope) is not None:
+        if get_watermark(conn, scope) == week:
             continue
         rows.extend(
             {**row, "raw_payload": {}, "sync_batch_id": batch_id}
             for row in worldbank.parse_indicator(worldbank.fetch_indicator("CN", code))
         )
-        set_watermark(conn, scope, date.today().isoformat())
+        set_watermark(conn, scope, week)
     if rows:
         upsert_external_rows(conn, "macro_indicators", rows)
         build_indicators(conn, "macro")
@@ -116,9 +124,10 @@ def sync_worldbank(conn: Any, batch_id: str) -> dict[str, Any]:
 def sync_akshare(conn: Any, batch_id: str) -> dict[str, Any]:
     symbols = ["600519", "000001", "300750", "601318", "600036"]
     finance_rows = []
+    week = iso_week()
     for symbol in symbols:
         scope = f"akshare:finance:{symbol}"
-        if get_watermark(conn, scope) is not None:
+        if get_watermark(conn, scope) == week:
             continue
         finance_rows.extend(
             {**row, "raw_payload": {}, "sync_batch_id": batch_id}
@@ -126,7 +135,7 @@ def sync_akshare(conn: Any, batch_id: str) -> dict[str, Any]:
                 akshare_cn.fetch_financials(symbol), symbol
             )
         )
-        set_watermark(conn, scope, date.today().isoformat())
+        set_watermark(conn, scope, week)
     if finance_rows:
         upsert_external_rows(conn, "cn_financials", finance_rows)
         build_indicators(conn, "cn-finance")

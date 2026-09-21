@@ -7,7 +7,12 @@ import psycopg
 import pytest
 
 from etl.db import connect
-from etl.sync_external import get_watermark, sync_coingecko, sync_external
+from etl.sync_external import (
+    get_watermark,
+    sync_coingecko,
+    sync_external,
+    sync_worldbank,
+)
 
 
 @pytest.fixture
@@ -125,3 +130,37 @@ def test_sync_external_refreshes_indicator_dws(dsn, cleanup_external_sync, monke
 def test_get_watermark_missing_scope_returns_none(dsn):
     with psycopg.connect(dsn) as conn:
         assert get_watermark(conn, "coingecko:coin:does-not-exist") is None
+
+
+def test_iso_week_formats_with_zero_padded_week():
+    from datetime import date
+
+    from etl.sync_external import iso_week
+
+    assert iso_week(date(2026, 9, 22)) == "2026-W39"
+    assert iso_week(date(2026, 1, 5)) == "2026-W02"
+
+
+def test_sync_worldbank_skips_within_same_week(dsn, cleanup_external_sync, monkeypatch):
+    from etl.sources import worldbank
+
+    calls: list[str] = []
+
+    def _fake(_country: str, code: str) -> list[dict]:
+        calls.append(code)
+        return [{"date": "2024", "value": 1.0, "indicator_name": code}]
+
+    monkeypatch.setattr(worldbank, "fetch_indicator", _fake)
+    batch = f"test-extsync-{uuid.uuid4()}"
+
+    with connect(dsn) as conn:
+        first = sync_worldbank(conn, batch_id=batch)
+        conn.commit()
+    assert len(calls) == 3  # 三个指标各取一次
+
+    calls.clear()
+    with connect(dsn) as conn:
+        second = sync_worldbank(conn, batch_id=batch)
+        conn.commit()
+    assert calls == []  # 同一周内全部跳过
+    assert second["rows"] == 0
