@@ -1223,7 +1223,7 @@ Expected: 全部通过，无回归
 - [ ] **Step 7: Commit**
 
 ```bash
-git add warehouse/models/02_ods.sql warehouse/etl/load_external.py warehouse/etl/build_indicator.py warehouse/etl/build_daily_metrics.py warehouse/tests/test_build_daily_metrics.py
+git add warehouse/models/02_ods.sql warehouse/etl/load_external.py warehouse/etl/build_indicator.py warehouse/etl/build_daily_metrics.py warehouse/tests/test_build_daily_metrics.py warehouse/tests/test_build_indicator.py warehouse/tests/test_sync_external.py
 git commit -m "feat: 由 K 线与股本派生换手率与总市值
 
 换手率 = volume(手) × 10000 ÷ 流通股本，总市值 = close × 总股本，
