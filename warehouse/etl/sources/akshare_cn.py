@@ -6,6 +6,26 @@ from typing import Any, Iterator
 
 FINANCIAL_INDICATORS = ("净利润", "净利润同比增长率", "扣非净利润", "营业总收入")
 
+_UNIT_MULTIPLIERS = {"亿": 1e8, "万": 1e4, "%": 1.0}
+
+
+def _parse_numeric(value: Any) -> float | None:
+    """同花顺财务摘要返回带中文单位的字符串（如 '445.17亿'），需换算为数值。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    for unit, multiplier in _UNIT_MULTIPLIERS.items():
+        if text.endswith(unit):
+            text = text[: -len(unit)]
+            try:
+                return float(text) * multiplier
+            except ValueError:
+                return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
 
 def _ak() -> Any:
     import akshare  # lazy: heavy dependency
@@ -29,12 +49,8 @@ def parse_financials(
     for record in records:
         report_date = record.get("报告期")
         for indicator in FINANCIAL_INDICATORS:
-            value = record.get(indicator)
-            if value is None:
-                continue
-            try:
-                numeric = float(value)
-            except (TypeError, ValueError):
+            numeric = _parse_numeric(record.get(indicator))
+            if numeric is None:
                 continue
             yield {
                 "symbol": symbol,

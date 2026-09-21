@@ -25,6 +25,54 @@ def test_parse_financials_expands_wide_rows():
     } in rows
 
 
+def test_parse_financials_converts_yi_suffix():
+    """同花顺真实响应中金额带「亿」后缀，必须换算为数值而不是丢弃。"""
+    records = [{"报告期": "2026-06-30", "净利润": "445.17亿"}]
+    rows = list(parse_financials(records, symbol="600519"))
+    assert rows == [
+        {
+            "symbol": "600519",
+            "report_date": "2026-06-30",
+            "indicator_name": "净利润",
+            "indicator_value": 445.17e8,
+        }
+    ]
+
+
+def test_parse_financials_converts_percent_suffix():
+    """同比/比率类指标带「%」后缀，换算后保留百分数数值。"""
+    records = [{"报告期": "2026-06-30", "净利润同比增长率": "-1.95%"}]
+    rows = list(parse_financials(records, symbol="600519"))
+    assert rows == [
+        {
+            "symbol": "600519",
+            "report_date": "2026-06-30",
+            "indicator_name": "净利润同比增长率",
+            "indicator_value": -1.95,
+        }
+    ]
+
+
+def test_parse_financials_converts_wan_suffix():
+    """小额科目带「万」后缀，换算为绝对值。"""
+    records = [{"报告期": "2026-06-30", "净利润": "1234.5万"}]
+    rows = list(parse_financials(records, symbol="600519"))
+    assert rows == [
+        {
+            "symbol": "600519",
+            "report_date": "2026-06-30",
+            "indicator_name": "净利润",
+            "indicator_value": 1234.5e4,
+        }
+    ]
+
+
+def test_parse_financials_skips_boolean_missing_values():
+    """缺失科目在同花顺响应中是布尔 False，必须跳过而不是记为 0。"""
+    records = [{"报告期": "2026-06-30", "净利润": False}]
+    assert list(parse_financials(records, symbol="600519")) == []
+
+
 def test_parse_lhb_maps_rows():
     rows = list(parse_lhb(LHB))
     assert len(rows) == 1
