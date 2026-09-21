@@ -512,7 +512,9 @@ def iso_week(today: date | None = None) -> str:
 
 Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sync_external.py -q`
 
-Expected: 全部通过（含既有的 5 个测试，无回归）
+Expected: 全部通过（含既有的 4 个测试 + 新增 3 个，共 7 个，无回归）
+
+> 注：新增测试必须包含**跨周重采**一例。仅测「同周跳过」不足以保护本次修复——旧实现的「永久跳过」天然包含「同周跳过」，该测试在旧实现下同样通过。跨周用例必须在旧实现下失败。
 
 - [ ] **Step 5: Commit**
 
