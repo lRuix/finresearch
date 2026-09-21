@@ -220,7 +220,7 @@ def parse_balance_sheet(
 
 Run: `cd warehouse && /Users/iRuiX/Documents/Project/finresearch/backend/.venv/bin/python -m pytest tests/test_sources_sina_cn.py -q`
 
-Expected: `5 passed`
+Expected: `6 passed`
 
 - [ ] **Step 5: Commit**
 
