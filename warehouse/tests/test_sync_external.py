@@ -29,6 +29,7 @@ def cleanup_external_sync(dsn):
             "ods_cn_lhb",
             "ods_cn_balance",
             "ods_cn_share_structure",
+            "ods_cn_daily_metrics",
         ):
             cur.execute(f"DELETE FROM {table} WHERE sync_batch_id LIKE 'test-extsync-%'")
         cur.execute(

@@ -114,6 +114,19 @@ EXTERNAL_TABLES: dict[str, dict[str, Any]] = {
             "sync_batch_id",
         ],
     },
+    "cn_daily_metrics": {
+        "table": "ods_cn_daily_metrics",
+        "key": ["symbol", "trade_date"],
+        "columns": [
+            "symbol",
+            "trade_date",
+            "close_price",
+            "turnover_rate",
+            "market_cap",
+            "raw_payload",
+            "sync_batch_id",
+        ],
+    },
 }
 
 

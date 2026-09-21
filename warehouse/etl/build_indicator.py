@@ -106,6 +106,23 @@ def _iter_rows(cur: Any, source: str) -> Iterator[tuple[str, str, str | None, st
                 if value is None:
                     continue
                 yield source_key, name, None, code, _parse_date(trade_date), value
+    elif source == "cn-daily":
+        cur.execute(
+            """
+            SELECT symbol, trade_date, turnover_rate, market_cap
+            FROM ods_cn_daily_metrics
+            """
+        )
+        for row in cur.fetchall():
+            symbol = row["symbol"]
+            trade_date = row["trade_date"]
+            for source_key, name, unit, value in (
+                ("turnover_rate", "换手率", "%", row["turnover_rate"]),
+                ("market_cap", "总市值", "CNY", row["market_cap"]),
+            ):
+                if value is None:
+                    continue
+                yield source_key, name, unit, symbol, _parse_date(trade_date), value
     else:
         raise ValueError(f"unknown indicator source: {source}")
 

@@ -249,3 +249,15 @@ CREATE TABLE IF NOT EXISTS ods_cn_share_structure (
   sync_batch_id TEXT NOT NULL,
   PRIMARY KEY (symbol, change_date)
 );
+
+CREATE TABLE IF NOT EXISTS ods_cn_daily_metrics (
+  symbol TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  close_price DOUBLE PRECISION,
+  turnover_rate DOUBLE PRECISION,
+  market_cap DOUBLE PRECISION,
+  raw_payload JSONB NOT NULL DEFAULT '{}',
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_batch_id TEXT NOT NULL,
+  PRIMARY KEY (symbol, trade_date)
+);

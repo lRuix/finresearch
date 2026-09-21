@@ -31,6 +31,7 @@ def cleanup_indicator(dsn):
             "DELETE FROM dim_indicator WHERE source IN ('crypto','cn-balance','cn-daily')"
         )
         cur.execute("DELETE FROM ods_cn_balance WHERE sync_batch_id LIKE 'test-%'")
+        cur.execute("DELETE FROM ods_cn_daily_metrics WHERE sync_batch_id LIKE 'test-%'")
         conn.commit()
 
 
