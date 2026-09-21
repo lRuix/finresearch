@@ -9,6 +9,7 @@ import pytest
 from etl.db import connect
 from etl.sync_external import (
     get_watermark,
+    set_watermark,
     sync_coingecko,
     sync_external,
     sync_worldbank,
@@ -164,3 +165,43 @@ def test_sync_worldbank_skips_within_same_week(dsn, cleanup_external_sync, monke
         conn.commit()
     assert calls == []  # 同一周内全部跳过
     assert second["rows"] == 0
+
+
+def test_sync_worldbank_resyncs_when_watermark_is_stale(
+    dsn, cleanup_external_sync, monkeypatch
+):
+    from datetime import date
+
+    from etl.sources import worldbank
+
+    calls: list[str] = []
+
+    def _fake(_country: str, code: str) -> list[dict]:
+        calls.append(code)
+        return [{"date": "2024", "value": 1.0, "indicator_name": code}]
+
+    monkeypatch.setattr(worldbank, "fetch_indicator", _fake)
+    batch = f"test-extsync-{uuid.uuid4()}"
+    scopes = [
+        f"worldbank:series:{code}"
+        for code in ("NY.GDP.MKTP.CD", "FP.CPI.TOTL.ZG", "FR.INR.LEND")
+    ]
+
+    # 显式把水位线设成很早的周，模拟「跨周」：旧实现会因 is not None 永久跳过，
+    # 从而暴露「跨周不重采」的缺陷。
+    with connect(dsn) as conn:
+        for scope in scopes:
+            set_watermark(conn, scope, "2020-W01")
+        conn.commit()
+
+    with connect(dsn) as conn:
+        sync_worldbank(conn, batch_id=batch)
+        conn.commit()
+
+    assert len(calls) == 3  # 水位线已过期，必须重新抓取
+
+    iso = date.today().isocalendar()
+    expected = f"{iso.year}-W{iso.week:02d}"
+    with connect(dsn) as conn:
+        for scope in scopes:
+            assert get_watermark(conn, scope) == expected  # 水位线被推进到当前周
