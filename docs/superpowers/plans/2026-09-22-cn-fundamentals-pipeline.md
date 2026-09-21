@@ -600,7 +600,6 @@ docker exec -i warehouse-db-1 psql -U warehouse -d warehouse_test -v ON_ERROR_ST
             "DELETE FROM dim_indicator WHERE source IN ('crypto','cn-balance','cn-daily')"
         )
         cur.execute("DELETE FROM ods_cn_balance WHERE sync_batch_id LIKE 'test-%'")
-        cur.execute("DELETE FROM ods_cn_daily_metrics WHERE sync_batch_id LIKE 'test-%'")
 ```
 
 `warehouse/tests/test_sync_external.py` 的 `cleanup_external_sync` 夹具，把新表与新 source 加进去：
@@ -878,10 +877,16 @@ def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
         )
         set_watermark(conn, scope, week)
     if rows:
+        new_dates = _new_share_dates(conn, rows)
         upsert_external_rows(conn, "cn_share_structure", rows)
-        _rewind_metrics_watermark(conn, min(row["change_date"] for row in rows))
+        if new_dates:
+            _rewind_metrics_watermark(conn, min(new_dates))
     return {"rows": len(rows), "failed": failed}
 ```
+
+> **修正说明（评审发现 Important 缺陷）**：本行原为 `_rewind_metrics_watermark(conn, min(row["change_date"] for row in rows))`，是**错误的**。`sync_share_structure` 每周对全市场重抓**完整变更历史**（实测仅茅台一只就返回 16 条、跨度 2001 至 2026），故 `rows` 是全市场历史，`min` 取到的是**全市场最早变更日**（≈1990），而非本次新增的日期。后果是水位线每周被打回远古日期，迫使 Task 5 每周全量重算，增量水位线形同虚设。
+>
+> 正确做法：先查表中已存在的 `(symbol, change_date)` 集合，与本次 `rows` 求差集，仅在差集非空时取其中最小 `change_date` 作为回退目标。
 
 并在 `sync_external` 的 `stats` 字典中加入两个新源：
 
