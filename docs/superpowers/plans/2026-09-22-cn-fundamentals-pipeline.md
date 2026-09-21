@@ -877,7 +877,7 @@ def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
         )
         set_watermark(conn, scope, week)
     if rows:
-        new_dates = _new_share_dates(conn, rows)
+        new_dates = _new_change_dates(conn, rows)
         upsert_external_rows(conn, "cn_share_structure", rows)
         if new_dates:
             _rewind_metrics_watermark(conn, min(new_dates))
