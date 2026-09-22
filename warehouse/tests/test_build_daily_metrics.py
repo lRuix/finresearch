@@ -139,29 +139,7 @@ def _seed_shares(
         conn.commit()
 
 
-@pytest.fixture
-def metrics_env(dsn):
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO dim_market (market_id, name, region, currency)
-            VALUES ('a-share', 'A股', 'CN', 'CNY')
-            ON CONFLICT (market_id) DO NOTHING
-            """
-        )
-        for symbol in SYMBOLS:
-            cur.execute(
-                """
-                INSERT INTO dim_instrument (market_id, symbol, name)
-                VALUES ('a-share', %s, %s)
-                ON CONFLICT (market_id, symbol) DO NOTHING
-                """,
-                (symbol, f"测试标的{symbol}"),
-            )
-        conn.commit()
-
-    yield SYMBOLS
-
+def _cleanup_metrics_env(dsn: str) -> None:
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM ods_cn_daily_metrics WHERE symbol = ANY(%s)", (list(SYMBOLS),))
         cur.execute("DELETE FROM ods_cn_share_structure WHERE symbol = ANY(%s)", (list(SYMBOLS),))
@@ -193,6 +171,34 @@ def metrics_env(dsn):
             (METRICS_SCOPES,),
         )
         conn.commit()
+
+
+@pytest.fixture
+def metrics_env(dsn):
+    # 既清理残留（上轮失败留下的行），也在收尾时清理，保证断言与执行顺序无关
+    _cleanup_metrics_env(dsn)
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dim_market (market_id, name, region, currency)
+            VALUES ('a-share', 'A股', 'CN', 'CNY')
+            ON CONFLICT (market_id) DO NOTHING
+            """
+        )
+        for symbol in SYMBOLS:
+            cur.execute(
+                """
+                INSERT INTO dim_instrument (market_id, symbol, name)
+                VALUES ('a-share', %s, %s)
+                ON CONFLICT (market_id, symbol) DO NOTHING
+                """,
+                (symbol, f"测试标的{symbol}"),
+            )
+        conn.commit()
+
+    yield SYMBOLS
+
+    _cleanup_metrics_env(dsn)
 
 
 def _metrics_rows(dsn: str) -> dict[tuple[str, str], dict]:
@@ -247,3 +253,76 @@ def test_new_symbol_without_watermark_processes_its_full_history(
     with connect(dsn) as conn:
         assert get_watermark(conn, _metrics_scope(SYMBOL_SYNCED)) == "2026-09-22"
         assert get_watermark(conn, _metrics_scope(SYMBOL_BRAND_NEW)) == "2026-09-22"
+
+
+def _daily_indicator_rows(dsn: str, symbol: str) -> list[tuple[str, str, float]]:
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.source_key, f.as_of_date::text, f.value
+            FROM fact_indicator f
+            JOIN dim_indicator d ON d.indicator_id = f.indicator_id
+            WHERE d.source = 'cn-daily' AND f.ref_key = %s
+            ORDER BY d.source_key
+            """,
+            (symbol,),
+        )
+        return cur.fetchall()
+
+
+def test_cn_daily_indicators_are_loaded_with_correct_units(dsn, metrics_env):
+    """cn-daily 指标分支的入库级覆盖：换手率（%）与总市值（CNY）。
+
+    该分支此前没有任何测试执行过。换手率以百分数（小数形式）落库是最易错、
+    错了会静默污染下游因子的约定，必须钉住单位与数值。
+    """
+    _seed_klines(dsn, SYMBOL_BRAND_NEW, ("2026-09-21",), close=10.0, volume=50000.0)
+    _seed_shares(dsn, SYMBOL_BRAND_NEW, "2026-05-28", 1_000_000_000.0, 500_000_000.0)
+
+    build_daily_metrics(dsn, batch_id=f"test-metrics-{uuid.uuid4()}")
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT source_key, name, unit FROM dim_indicator
+            WHERE source = 'cn-daily' ORDER BY source_key
+            """
+        )
+        assert cur.fetchall() == [
+            ("market_cap", "总市值", "CNY"),
+            ("turnover_rate", "换手率", "%"),
+        ]
+
+    # 换手率 = volume(手) × 10000 ÷ 流通股本 = 50000 × 10000 ÷ 5e8 = 1.0(%)
+    # 总市值 = close × 总股本 = 10 × 1e9 = 1e10(CNY)
+    rows = _daily_indicator_rows(dsn, SYMBOL_BRAND_NEW)
+    assert [(key, as_of) for key, as_of, _ in rows] == [
+        ("market_cap", "2026-09-21"),
+        ("turnover_rate", "2026-09-21"),
+    ]
+    assert rows[0][2] == pytest.approx(1e10)
+    assert rows[1][2] == pytest.approx(1.0)
+
+    with connect(dsn) as conn:
+        assert get_watermark(conn, _metrics_scope(SYMBOL_BRAND_NEW)) == "2026-09-22"
+
+
+def test_cn_daily_skips_turnover_indicator_when_float_shares_missing(
+    dsn, metrics_env
+):
+    """流通股本缺失时跳过换手率（不写 0），总市值仍然产出。"""
+    _seed_klines(dsn, SYMBOL_BRAND_NEW, ("2026-09-21",), close=10.0, volume=50000.0)
+    _seed_shares(dsn, SYMBOL_BRAND_NEW, "2026-05-28", 1_000_000_000.0, None)
+
+    build_daily_metrics(dsn, batch_id=f"test-metrics-{uuid.uuid4()}")
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT source_key FROM dim_indicator WHERE source = 'cn-daily' ORDER BY source_key"
+        )
+        # 换手率整条不产出：既不建 dim_indicator，也不写 0
+        assert cur.fetchall() == [("market_cap",)]
+
+    rows = _daily_indicator_rows(dsn, SYMBOL_BRAND_NEW)
+    assert [(key, as_of) for key, as_of, _ in rows] == [("market_cap", "2026-09-21")]
+    assert rows[0][2] == pytest.approx(1e10)
