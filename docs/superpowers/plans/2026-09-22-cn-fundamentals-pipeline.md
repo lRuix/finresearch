@@ -945,7 +945,9 @@ cn-balance 指标来源，全市场采集采用 per-symbol 容错。"
 
 验证基准：600519 于 2026-09-21，`volume=25017` 手、`float_shares=1250081601` → `0.200123%`，与新浪 `turnover=0.0020012`（小数）一致。
 
-水位线语义：`cn-daily:metrics` 存**下一个待处理交易日**，处理条件为 `date_key >= 水位线`（默认 `1970-01-01`）。这样股本回填时可以简单地把水位线回退到 `change_date` 即可重算。
+水位线语义：`cn-daily:metrics:{symbol}` 存**下一个待处理交易日**，处理条件为 `date_key >= 水位线`（默认 `1970-01-01`）。这样股本回填时可以简单地把水位线回退到 `change_date` 即可重算。
+
+> **执行修订（评审后修复轮，2026-09-23）**：本计划原文写的是**单个全局** scope `cn-daily:metrics`。该设计有缺陷——全局水位线只前进、不感知标的集合变化，K 线全市场补采后新标的的历史 K 线会全部落在水位线之前而被静默丢弃（退出码仍为 0）。实现已改为 **per-symbol** 水位线 `cn-daily:metrics:{symbol}`：无水位线即等价于「从未计算过」，回溯该标的全部历史；`_rewind_metrics_watermark(conn, symbol, earliest_change)` 只回退受影响标的。旧全局 scope 已废弃。详见 spec 4.3 节。
 
 - [ ] **Step 1: 追加 DDL 并应用到两个库**
 

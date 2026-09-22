@@ -252,7 +252,8 @@ CREATE TABLE sync_watermarks (
 - **DWD 明细层**：`dim_date / dim_market / dim_instrument / dim_provider` + `fact_kline`（按 `time` 范围分区）/ `fact_news`；多 provider 按优先级取主源。
 - **DWS 汇总层**：`dws_instrument_daily` / `dws_market_daily` 日频物化视图。
 - **ETL**：K 线由 `sync_incremental.py` 直采（按市场动态发现标的：A股/港股/基金/加密全量，美股/韩股配置清单，外汇静态列表）→ `load_ods.py` → `build_dwd.py` → `build_dws.py`；按 `etl_watermarks` 水位线只装载新增 K 线/新闻，ODS/DWD/新闻与水位线推进同事务，失败回滚不推进水位线，事务提交后再刷新 DWS。`migrate_seed.py` 为历史迁移工具，`research.db` 已退出同步链路。
-- **外部数据源**：SEC EDGAR（美股财报/公司元数据）、CoinGecko（加密市值）、World Bank（宏观指标）、akshare（A股财务/龙虎榜）经 `sync_external.py` 按源独立事务入 ODS（`ods_sec_*` / `ods_crypto_meta` / `ods_macro_indicators` / `ods_cn_*`）→ `dim_indicator` / `fact_indicator` 通用指标模型 → `dws_indicator_daily`；单源失败仅回滚自身、不推进其水位线。
+- **外部数据源**：SEC EDGAR（美股财报/公司元数据）、CoinGecko（加密市值）、World Bank（宏观指标）、akshare（A股财务/龙虎榜）、新浪（A股资产负债表：总资产/净资产）、东财（A股股本结构：总股本/流通股本）经 `sync_external.py` 按源独立事务入 ODS（`ods_sec_*` / `ods_crypto_meta` / `ods_macro_indicators` / `ods_cn_balance` / `ods_cn_share_structure` / `ods_cn_*`）→ `dim_indicator` / `fact_indicator` 通用指标模型 → `dws_indicator_daily`；单源失败仅回滚自身、不推进其水位线。新增的 3 张 ODS 表要求既有库重跑一次 `models/02_ods.sql`（幂等）。
+- **派生指标**：`build_daily_metrics.py` 由 `fact_kline` + `ods_cn_share_structure` 计算换手率与总市值，写入 `ods_cn_daily_metrics` 并接入指标模型；**必须在 K 线同步之后运行**（README 的 cron 模板为 `sync_daily && sync_external && build_daily_metrics`），增量按 `cn-daily:metrics:{symbol}` **per-symbol 水位线**维护——无水位线的新标的会回溯全部历史，股本回填时只回退受影响标的。
 
 ## 启动拓扑
 
