@@ -42,6 +42,16 @@ def iso_week(today: date | None = None) -> str:
     return f"{iso.year}-W{iso.week:02d}"
 
 
+def _already_synced_this_week(conn: Any, scope: str, week: str) -> bool:
+    """周粒度水位线的统一判据：**只有值等于本周**才算已同步。
+
+    判据曾经在 sec / worldbank / akshare-finance 三处各写一份 `== week`，
+    修复前的缺陷是 `is not None`（一旦设置即永久跳过）。统一到此处后，
+    任何一处回退都会同时被三个源的参数化用例覆盖。
+    """
+    return get_watermark(conn, scope) == week
+
+
 def _run_source(
     dsn: str, batch_id: str, fn: Callable[[Any, str], dict[str, Any]]
 ) -> dict[str, Any]:
@@ -80,7 +90,7 @@ def sync_sec(conn: Any, batch_id: str) -> dict[str, Any]:
     week = iso_week()
     for cik in ciks:
         scope = f"sec:cik:{cik}"
-        if get_watermark(conn, scope) == week:
+        if _already_synced_this_week(conn, scope, week):
             continue
         submissions_rows.append(
             {
@@ -108,7 +118,7 @@ def sync_worldbank(conn: Any, batch_id: str) -> dict[str, Any]:
     week = iso_week()
     for code in indicators:
         scope = f"worldbank:series:{code}"
-        if get_watermark(conn, scope) == week:
+        if _already_synced_this_week(conn, scope, week):
             continue
         rows.extend(
             {**row, "raw_payload": {}, "sync_batch_id": batch_id}
@@ -127,7 +137,7 @@ def sync_akshare(conn: Any, batch_id: str) -> dict[str, Any]:
     week = iso_week()
     for symbol in symbols:
         scope = f"akshare:finance:{symbol}"
-        if get_watermark(conn, scope) == week:
+        if _already_synced_this_week(conn, scope, week):
             continue
         finance_rows.extend(
             {**row, "raw_payload": {}, "sync_batch_id": batch_id}
@@ -253,7 +263,7 @@ def sync_balance_sheet(conn: Any, batch_id: str) -> dict[str, Any]:
     failed = 0
     for symbol in _a_share_universe():
         scope = f"cn-balance:{symbol}"
-        if get_watermark(conn, scope) == week:
+        if _already_synced_this_week(conn, scope, week):
             continue
         try:
             parsed = list(
@@ -279,7 +289,7 @@ def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
     failed = 0
     for symbol in _a_share_universe():
         scope = f"cn-share:{symbol}"
-        if get_watermark(conn, scope) == week:
+        if _already_synced_this_week(conn, scope, week):
             continue
         try:
             parsed = list(

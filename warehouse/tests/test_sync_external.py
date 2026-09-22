@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Callable, NamedTuple
 
 import psycopg
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from etl.db import connect
 from etl.sync_external import (
     get_watermark,
+    iso_week,
     set_watermark,
     sync_coingecko,
     sync_external,
@@ -53,6 +55,7 @@ def cleanup_external_sync(dsn):
                OR scope LIKE 'worldbank:%' OR scope LIKE 'akshare:%'
                OR scope LIKE 'cn-balance:%' OR scope LIKE 'cn-share:%'
                OR scope = 'cn-daily:metrics' OR scope LIKE 'cn-daily:metrics:%'
+               OR scope LIKE 'test:%'
             """
         )
         conn.commit()
@@ -149,69 +152,155 @@ def test_iso_week_formats_with_zero_padded_week():
     assert iso_week(date(2026, 1, 5)) == "2026-W02"
 
 
-def test_sync_worldbank_skips_within_same_week(dsn, cleanup_external_sync, monkeypatch):
-    from etl.sources import worldbank
+# --- 周粒度水位线判据：sec / worldbank / akshare 三个源共用一份回归保护 -------
+#
+# 三个源的判据曾各自复制一份，只有 worldbank 被测试覆盖：把 sec / akshare 的
+# 判据改回旧的 `is not None`（永久跳过）时全套测试仍然全绿。此处用同一组参数化
+# 用例覆盖三个源。
+
+SEC_CIKS = ("0000320193", "0001045810", "0000789019", "0001318605")
+WORLDBANK_CODES = ("NY.GDP.MKTP.CD", "FP.CPI.TOTL.ZG", "FR.INR.LEND")
+AKSHARE_FINANCE_SYMBOLS = ("600519", "000001", "300750", "601318", "600036")
+
+
+class _WeeklySourceCase(NamedTuple):
+    run: Callable[..., dict]
+    scopes: list[str]
+    calls: list[str]
+    expected_calls: int
+
+
+def _record(calls: list[str], key: str, payload):
+    calls.append(key)
+    return payload
+
+
+def _weekly_source_case(name: str, monkeypatch) -> _WeeklySourceCase:
+    """构造指定源的单次采集调用记录器，返回 (入口, 水位线 scope, 调用记录, 首次调用数)。"""
+    from etl.sources import akshare_cn, sec_edgar, worldbank
+    from etl.sync_external import sync_akshare, sync_sec
 
     calls: list[str] = []
 
-    def _fake(_country: str, code: str) -> list[dict]:
-        calls.append(code)
-        return [{"date": "2024", "value": 1.0, "indicator_name": code}]
+    if name == "sec":
+        monkeypatch.setattr(
+            sec_edgar,
+            "fetch_submissions",
+            lambda cik: _record(
+                calls,
+                cik,
+                {"cik": cik, "name": "X", "tickers": [], "exchanges": []},
+            ),
+        )
+        monkeypatch.setattr(
+            sec_edgar,
+            "fetch_company_facts",
+            lambda cik: _record(calls, cik, {"cik": cik, "facts": {}}),
+        )
+        return _WeeklySourceCase(
+            sync_sec,
+            [f"sec:cik:{cik}" for cik in SEC_CIKS],
+            calls,
+            len(SEC_CIKS) * 2,
+        )
 
-    monkeypatch.setattr(worldbank, "fetch_indicator", _fake)
-    batch = f"test-extsync-{uuid.uuid4()}"
+    if name == "akshare":
+        monkeypatch.setattr(
+            akshare_cn,
+            "fetch_financials",
+            lambda symbol: _record(calls, symbol, []),
+        )
+        monkeypatch.setattr(akshare_cn, "fetch_lhb", lambda _start, _end: [])
+        return _WeeklySourceCase(
+            sync_akshare,
+            [f"akshare:finance:{symbol}" for symbol in AKSHARE_FINANCE_SYMBOLS],
+            calls,
+            len(AKSHARE_FINANCE_SYMBOLS),
+        )
 
-    with connect(dsn) as conn:
-        first = sync_worldbank(conn, batch_id=batch)
-        conn.commit()
-    assert len(calls) == 3  # 三个指标各取一次
+    monkeypatch.setattr(
+        worldbank,
+        "fetch_indicator",
+        lambda _country, code: _record(
+            calls,
+            code,
+            [
+                {
+                    "country": {"id": "CN"},
+                    "indicator": {"id": code, "value": code},
+                    "date": "2024",
+                    "value": 1.0,
+                }
+            ],
+        ),
+    )
+    return _WeeklySourceCase(
+        sync_worldbank,
+        [f"worldbank:series:{code}" for code in WORLDBANK_CODES],
+        calls,
+        len(WORLDBANK_CODES),
+    )
 
-    calls.clear()
-    with connect(dsn) as conn:
-        second = sync_worldbank(conn, batch_id=batch)
-        conn.commit()
-    assert calls == []  # 同一周内全部跳过
-    assert second["rows"] == 0
 
-
-def test_sync_worldbank_resyncs_when_watermark_is_stale(
-    dsn, cleanup_external_sync, monkeypatch
+def test_already_synced_this_week_compares_week_not_existence(
+    dsn, cleanup_external_sync
 ):
-    from datetime import date
+    """共享判据：只有「水位线 == 本周」才算已同步；存在但过期不算。"""
+    from etl.sync_external import _already_synced_this_week
 
-    from etl.sources import worldbank
-
-    calls: list[str] = []
-
-    def _fake(_country: str, code: str) -> list[dict]:
-        calls.append(code)
-        return [{"date": "2024", "value": 1.0, "indicator_name": code}]
-
-    monkeypatch.setattr(worldbank, "fetch_indicator", _fake)
-    batch = f"test-extsync-{uuid.uuid4()}"
-    scopes = [
-        f"worldbank:series:{code}"
-        for code in ("NY.GDP.MKTP.CD", "FP.CPI.TOTL.ZG", "FR.INR.LEND")
-    ]
-
-    # 显式把水位线设成很早的周，模拟「跨周」：旧实现会因 is not None 永久跳过，
-    # 从而暴露「跨周不重采」的缺陷。
     with connect(dsn) as conn:
-        for scope in scopes:
+        assert _already_synced_this_week(conn, "test:weekly:missing", iso_week()) is False
+        set_watermark(conn, "test:weekly:stale", "2020-W01")
+        assert _already_synced_this_week(conn, "test:weekly:stale", iso_week()) is False
+        set_watermark(conn, "test:weekly:current", iso_week())
+        assert _already_synced_this_week(conn, "test:weekly:current", iso_week()) is True
+        conn.commit()
+
+
+@pytest.mark.parametrize("name", ["sec", "worldbank", "akshare"])
+def test_weekly_source_skips_within_same_week(
+    dsn, cleanup_external_sync, monkeypatch, name
+):
+    case = _weekly_source_case(name, monkeypatch)
+    batch = f"test-extsync-{uuid.uuid4()}"
+
+    with connect(dsn) as conn:
+        case.run(conn, batch_id=batch)
+        conn.commit()
+    assert len(case.calls) == case.expected_calls  # 首次全采
+
+    case.calls.clear()
+    with connect(dsn) as conn:
+        case.run(conn, batch_id=batch)
+        conn.commit()
+    assert case.calls == []  # 同一周内全部跳过
+
+    with connect(dsn) as conn:
+        for scope in case.scopes:
+            assert get_watermark(conn, scope) == iso_week()
+
+
+@pytest.mark.parametrize("name", ["sec", "worldbank", "akshare"])
+def test_weekly_source_resyncs_when_watermark_is_stale(
+    dsn, cleanup_external_sync, monkeypatch, name
+):
+    """水位线不是本周时必须重采：旧判据 `is not None` 会永久跳过且无声无息。"""
+    case = _weekly_source_case(name, monkeypatch)
+    batch = f"test-extsync-{uuid.uuid4()}"
+
+    with connect(dsn) as conn:
+        for scope in case.scopes:
             set_watermark(conn, scope, "2020-W01")
         conn.commit()
 
     with connect(dsn) as conn:
-        sync_worldbank(conn, batch_id=batch)
+        case.run(conn, batch_id=batch)
         conn.commit()
 
-    assert len(calls) == 3  # 水位线已过期，必须重新抓取
-
-    iso = date.today().isocalendar()
-    expected = f"{iso.year}-W{iso.week:02d}"
+    assert len(case.calls) == case.expected_calls  # 水位线已过期，必须重新抓取
     with connect(dsn) as conn:
-        for scope in scopes:
-            assert get_watermark(conn, scope) == expected  # 水位线被推进到当前周
+        for scope in case.scopes:
+            assert get_watermark(conn, scope) == iso_week()  # 推进到当前周
 
 
 def test_sync_balance_sheet_tolerates_single_symbol_failure(
