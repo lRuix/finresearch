@@ -1,9 +1,14 @@
 """Daily A-share derived metrics tests."""
 from __future__ import annotations
 
+import uuid
+
+import psycopg
 import pytest
 
-from etl.build_daily_metrics import compute_rows, shares_as_of
+from etl.build_daily_metrics import build_daily_metrics, compute_rows, shares_as_of
+from etl.db import connect
+from etl.sync_external import get_watermark
 
 
 TABLE = {
@@ -49,3 +54,196 @@ def test_compute_rows_leaves_turnover_null_when_float_shares_missing():
     rows = list(compute_rows(KLINES, table))
     assert rows[0]["turnover_rate"] is None
     assert rows[0]["market_cap"] == pytest.approx(1252.57 * 1250081601.0)
+
+
+# --- 入库级集成用例 ---------------------------------------------------------
+#
+# 水位线 scope 契约（本文件用字面量钉住命名，避免测试与实现同时漂移）：
+#   增量水位线 = f"cn-daily:metrics:{symbol}"   （per-symbol，值为下一个待处理交易日）
+#   旧全局水位线 = "cn-daily:metrics"           （已废弃，改造后必须被忽略）
+SYMBOL_SYNCED = "TST900001"   # 已有水位线的标的
+SYMBOL_BRAND_NEW = "TST900002"  # 全新标的（无任何水位线）
+SYMBOLS = (SYMBOL_SYNCED, SYMBOL_BRAND_NEW)
+TEST_DATES = ("2026-09-18", "2026-09-21")
+
+
+def _metrics_scope(symbol: str) -> str:
+    return f"cn-daily:metrics:{symbol}"
+
+
+METRICS_SCOPES = [_metrics_scope(symbol) for symbol in SYMBOLS]
+
+
+def _set_watermark(dsn: str, scope: str, value: str) -> None:
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO etl_watermarks (scope, last_value, updated_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (scope) DO UPDATE SET last_value = EXCLUDED.last_value
+            """,
+            (scope, value),
+        )
+        conn.commit()
+
+
+def _seed_klines(
+    dsn: str, symbol: str, dates: tuple[str, ...], close: float = 10.0, volume: float = 50000.0
+) -> None:
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        for trade_date in dates:
+            cur.execute(
+                """
+                INSERT INTO fact_kline
+                  (market_id, instrument_id, provider_id, date_key, period, time,
+                   open, high, low, close, volume)
+                SELECT 'a-share', i.instrument_id, 'test-metrics', %s, 'd',
+                       %s::timestamp AT TIME ZONE 'UTC', %s, %s, %s, %s, %s
+                FROM dim_instrument i
+                WHERE i.market_id = 'a-share' AND i.symbol = %s
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    trade_date,
+                    f"{trade_date} 00:00:00",
+                    close,
+                    close,
+                    close,
+                    close,
+                    volume,
+                    symbol,
+                ),
+            )
+        conn.commit()
+
+
+def _seed_shares(
+    dsn: str,
+    symbol: str,
+    change_date: str,
+    total_shares: float,
+    float_shares: float | None,
+) -> None:
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO ods_cn_share_structure
+              (symbol, change_date, total_shares, float_shares, raw_payload, sync_batch_id)
+            VALUES (%s, %s, %s, %s, '{}', 'test-metrics')
+            ON CONFLICT (symbol, change_date) DO UPDATE SET
+              total_shares = EXCLUDED.total_shares,
+              float_shares = EXCLUDED.float_shares
+            """,
+            (symbol, change_date, total_shares, float_shares),
+        )
+        conn.commit()
+
+
+@pytest.fixture
+def metrics_env(dsn):
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dim_market (market_id, name, region, currency)
+            VALUES ('a-share', 'A股', 'CN', 'CNY')
+            ON CONFLICT (market_id) DO NOTHING
+            """
+        )
+        for symbol in SYMBOLS:
+            cur.execute(
+                """
+                INSERT INTO dim_instrument (market_id, symbol, name)
+                VALUES ('a-share', %s, %s)
+                ON CONFLICT (market_id, symbol) DO NOTHING
+                """,
+                (symbol, f"测试标的{symbol}"),
+            )
+        conn.commit()
+
+    yield SYMBOLS
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM ods_cn_daily_metrics WHERE symbol = ANY(%s)", (list(SYMBOLS),))
+        cur.execute("DELETE FROM ods_cn_share_structure WHERE symbol = ANY(%s)", (list(SYMBOLS),))
+        cur.execute(
+            """
+            DELETE FROM fact_indicator
+            WHERE ref_key = ANY(%s)
+              AND indicator_id IN (SELECT indicator_id FROM dim_indicator WHERE source = 'cn-daily')
+            """,
+            (list(SYMBOLS),),
+        )
+        cur.execute("DELETE FROM dim_indicator WHERE source = 'cn-daily'")
+        cur.execute(
+            "DELETE FROM fact_kline WHERE market_id = 'a-share' AND provider_id = 'test-metrics'"
+        )
+        cur.execute("DELETE FROM dim_instrument WHERE market_id = 'a-share' AND symbol = ANY(%s)", (list(SYMBOLS),))
+        cur.execute(
+            """
+            DELETE FROM dim_market
+            WHERE market_id = 'a-share'
+              AND NOT EXISTS (SELECT 1 FROM dim_instrument WHERE market_id = 'a-share')
+            """
+        )
+        cur.execute(
+            """
+            DELETE FROM etl_watermarks
+            WHERE scope = 'cn-daily:metrics' OR scope = ANY(%s)
+            """,
+            (METRICS_SCOPES,),
+        )
+        conn.commit()
+
+
+def _metrics_rows(dsn: str) -> dict[tuple[str, str], dict]:
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT symbol, trade_date, close_price, turnover_rate, market_cap
+            FROM ods_cn_daily_metrics
+            WHERE symbol = ANY(%s)
+            ORDER BY symbol, trade_date
+            """,
+            (list(SYMBOLS),),
+        )
+        return {
+            (row[0], row[1]): {
+                "close_price": row[2],
+                "turnover_rate": row[3],
+                "market_cap": row[4],
+            }
+            for row in cur.fetchall()
+        }
+
+
+def test_new_symbol_without_watermark_processes_its_full_history(
+    dsn, metrics_env
+):
+    """标的 A 已有水位线、标的 B 是全新标的 → B 的全部历史 K 线都必须被计算。
+
+    旧实现用单个全局水位线 `cn-daily:metrics`，且只取 `date_key >= 水位线`：
+    K 线全市场补采后新增标的的历史全部落在水位线之前，会被静默丢弃，
+    输出仍是 `{'rows': ...}`、退出码 0，与正确全量从外部无法区分。
+    真实库中该全局水位线残留为 2016-06-30，本用例同时钉住「已废弃 scope 被忽略」。
+    """
+    for symbol in SYMBOLS:
+        _seed_klines(dsn, symbol, TEST_DATES)
+        _seed_shares(dsn, symbol, "2026-05-28", 1_000_000_000.0, 500_000_000.0)
+
+    # A 已处理到 2026-09-18，水位线 = 下一个待处理交易日 2026-09-21
+    _set_watermark(dsn, _metrics_scope(SYMBOL_SYNCED), "2026-09-21")
+    # 旧全局水位线残留（真实库实测 2016-06-30）：改造后必须被忽略
+    _set_watermark(dsn, "cn-daily:metrics", "2026-09-21")
+
+    build_daily_metrics(dsn, batch_id=f"test-metrics-{uuid.uuid4()}")
+
+    rows = _metrics_rows(dsn)
+    assert set(rows) == {
+        (SYMBOL_SYNCED, "2026-09-21"),
+        (SYMBOL_BRAND_NEW, "2026-09-18"),
+        (SYMBOL_BRAND_NEW, "2026-09-21"),
+    }
+
+    with connect(dsn) as conn:
+        assert get_watermark(conn, _metrics_scope(SYMBOL_SYNCED)) == "2026-09-22"
+        assert get_watermark(conn, _metrics_scope(SYMBOL_BRAND_NEW)) == "2026-09-22"
