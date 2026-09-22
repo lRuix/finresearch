@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 import logging
 import os
+import sys
 from typing import Any, Callable
 
 from etl.build_indicator import build_indicators
@@ -14,6 +15,11 @@ from etl.sources import akshare_cn, coingecko, eastmoney_cn, sec_edgar, sina_cn,
 
 
 logger = logging.getLogger(__name__)
+
+# 批量采集清单的合理性下限：实测满量约 5567 只；低于此值视为采集范围失效。
+MIN_A_SHARE_UNIVERSE = 3000
+# 返回 stats 里保留的错误摘要条数（全量失败清单可能上万条）。
+_MAX_ERROR_SAMPLES = 5
 
 
 def get_watermark(conn: Any, scope: str) -> str | None:
@@ -250,20 +256,53 @@ def _new_change_dates(conn: Any, rows: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def _a_share_universe() -> list[str]:
-    """全 A 股 6 位代码清单。改用 akshare 代码表而非东财快照（后者当前不可用）。"""
+    """全 A 股 6 位代码清单。改用 akshare 代码表而非东财快照（后者当前不可用）。
+
+    清单数量的**合理性下限**是硬校验：实测满量约 5567 只。清单异常偏小时，
+    逐只容错会把"只采到 4%"表现为一次成功（退出码 0、`failed = 0`），
+    与正确的全量采集从外部无法区分——真实事故（76,272 行正常提交、failed 为 0）
+    正是这一类。故低于 `MIN_A_SHARE_UNIVERSE` 直接抛错，由 `sync_external`
+    标记批量源为 error 并让 `main()` 以非 0 退出。
+    """
     import akshare  # lazy: heavy dependency
 
     frame = akshare.stock_info_a_code_name()
-    return [str(code).strip() for code in frame["code"].tolist()]
+    codes = [str(code).strip() for code in frame["code"].tolist() if str(code).strip()]
+    if len(codes) < MIN_A_SHARE_UNIVERSE:
+        raise RuntimeError(
+            f"a-share universe too small: {len(codes)} < {MIN_A_SHARE_UNIVERSE}"
+        )
+    return codes
 
 
-def sync_balance_sheet(conn: Any, batch_id: str) -> dict[str, Any]:
+def _bulk_symbol_stats(
+    universe: list[str],
+    rows: list[dict[str, Any]],
+    failed: int,
+    skipped: int,
+    errors: list[str],
+) -> dict[str, Any]:
+    return {
+        "rows": len(rows),
+        "failed": failed,
+        "universe": len(universe),
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+
+def sync_balance_sheet(
+    conn: Any, batch_id: str, universe: list[str]
+) -> dict[str, Any]:
     week = iso_week()
     rows: list[dict[str, Any]] = []
     failed = 0
-    for symbol in _a_share_universe():
+    skipped = 0
+    errors: list[str] = []
+    for symbol in universe:
         scope = f"cn-balance:{symbol}"
         if _already_synced_this_week(conn, scope, week):
+            skipped += 1
             continue
         try:
             parsed = list(
@@ -271,7 +310,9 @@ def sync_balance_sheet(conn: Any, batch_id: str) -> dict[str, Any]:
             )
         except Exception as exc:  # noqa: BLE001 - 单只失败不阻塞全市场
             failed += 1
-            logger.warning("balance sheet failed for %s: %s", symbol, exc)
+            logger.warning("balance sheet failed for %s: %s", symbol, exc, exc_info=True)
+            if len(errors) < _MAX_ERROR_SAMPLES:
+                errors.append(f"{symbol}: {exc}")
             continue
         rows.extend(
             {**row, "raw_payload": {}, "sync_batch_id": batch_id} for row in parsed
@@ -280,16 +321,21 @@ def sync_balance_sheet(conn: Any, batch_id: str) -> dict[str, Any]:
     if rows:
         upsert_external_rows(conn, "cn_balance", rows)
         build_indicators(conn, "cn-balance")
-    return {"rows": len(rows), "failed": failed}
+    return _bulk_symbol_stats(universe, rows, failed, skipped, errors)
 
 
-def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
+def sync_share_structure(
+    conn: Any, batch_id: str, universe: list[str]
+) -> dict[str, Any]:
     week = iso_week()
     rows: list[dict[str, Any]] = []
     failed = 0
-    for symbol in _a_share_universe():
+    skipped = 0
+    errors: list[str] = []
+    for symbol in universe:
         scope = f"cn-share:{symbol}"
         if _already_synced_this_week(conn, scope, week):
+            skipped += 1
             continue
         try:
             parsed = list(
@@ -299,7 +345,11 @@ def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
             )
         except Exception as exc:  # noqa: BLE001 - 单只失败不阻塞全市场
             failed += 1
-            logger.warning("share structure failed for %s: %s", symbol, exc)
+            logger.warning(
+                "share structure failed for %s: %s", symbol, exc, exc_info=True
+            )
+            if len(errors) < _MAX_ERROR_SAMPLES:
+                errors.append(f"{symbol}: {exc}")
             continue
         rows.extend(
             {**row, "raw_payload": {}, "sync_batch_id": batch_id} for row in parsed
@@ -310,7 +360,7 @@ def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
         upsert_external_rows(conn, "cn_share_structure", rows)
         for symbol, earliest_change in new_dates.items():
             _rewind_metrics_watermark(conn, symbol, earliest_change)
-    return {"rows": len(rows), "failed": failed}
+    return _bulk_symbol_stats(universe, rows, failed, skipped, errors)
 
 
 def sync_external(dsn: str, batch_id: str | None = None) -> dict[str, Any]:
@@ -320,13 +370,45 @@ def sync_external(dsn: str, batch_id: str | None = None) -> dict[str, Any]:
         "sec": _run_source(dsn, batch_id, sync_sec),
         "worldbank": _run_source(dsn, batch_id, sync_worldbank),
         "akshare": _run_source(dsn, batch_id, sync_akshare),
-        "cn-balance": _run_source(dsn, batch_id, sync_balance_sheet),
-        "cn-share": _run_source(dsn, batch_id, sync_share_structure),
     }
+    # 清单只取一次（约 11s）并做合理性校验后传给两个批量源：
+    # 两个 sync 各自取一次既重复耗时，也无法在此集中判断"覆盖范围是否正常"。
+    try:
+        universe = _a_share_universe()
+    except Exception as exc:  # noqa: BLE001 - 清单不可用视为两个批量源失败
+        logger.warning("a-share universe unavailable: %s", exc, exc_info=True)
+        stats["cn-balance"] = {"status": "error", "error": str(exc)}
+        stats["cn-share"] = {"status": "error", "error": str(exc)}
+    else:
+        stats["cn-balance"] = _run_source(
+            dsn, batch_id, lambda conn, batch: sync_balance_sheet(conn, batch, universe)
+        )
+        stats["cn-share"] = _run_source(
+            dsn, batch_id, lambda conn, batch: sync_share_structure(conn, batch, universe)
+        )
     with connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("REFRESH MATERIALIZED VIEW dws_indicator_daily")
         conn.commit()
     return stats
+
+
+def _failed_sources(stats: dict[str, Any]) -> list[str]:
+    """判定哪些源算失败：状态非 ok、per-symbol 失败非 0、或覆盖范围不足。
+
+    第三种正是真实事故的形态——`failed` 为 0、退出码 0，只有清单大小能暴露它。
+    """
+    failed: list[str] = []
+    for source, result in stats.items():
+        if result.get("status") != "ok":
+            failed.append(source)
+            continue
+        if result.get("failed"):
+            failed.append(source)
+            continue
+        universe = result.get("universe")
+        if universe is not None and universe < MIN_A_SHARE_UNIVERSE:
+            failed.append(source)
+    return failed
 
 
 def main() -> None:
@@ -334,6 +416,10 @@ def main() -> None:
     stats = sync_external(dsn)
     for source, result in stats.items():
         print(f"{source}: {result}")
+    failed = _failed_sources(stats)
+    if failed:
+        print(f"FAILED sources: {', '.join(failed)}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

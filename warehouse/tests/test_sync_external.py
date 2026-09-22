@@ -8,6 +8,7 @@ import psycopg
 import pytest
 
 from etl.db import connect
+from etl.sources import eastmoney_cn
 from etl.sync_external import (
     get_watermark,
     iso_week,
@@ -309,10 +310,6 @@ def test_sync_balance_sheet_tolerates_single_symbol_failure(
     from etl.sources import sina_cn
     from etl.sync_external import sync_balance_sheet
 
-    monkeypatch.setattr(
-        "etl.sync_external._a_share_universe", lambda: ["600519", "000001"]
-    )
-
     def _fetch(code: str) -> list[dict]:
         if code == "000001":
             raise RuntimeError("network down")
@@ -321,7 +318,9 @@ def test_sync_balance_sheet_tolerates_single_symbol_failure(
     monkeypatch.setattr(sina_cn, "fetch_balance_sheet", _fetch)
 
     with connect(dsn) as conn:
-        stats = sync_balance_sheet(conn, batch_id=f"test-extsync-{uuid.uuid4()}")
+        stats = sync_balance_sheet(
+            conn, batch_id=f"test-extsync-{uuid.uuid4()}", universe=["600519", "000001"]
+        )
         conn.commit()
 
     assert stats["rows"] == 1
@@ -334,7 +333,6 @@ def test_sync_share_structure_rewinds_metrics_watermark_on_backfill(
     from etl.sources import eastmoney_cn
     from etl.sync_external import metrics_scope, set_watermark, sync_share_structure
 
-    monkeypatch.setattr("etl.sync_external._a_share_universe", lambda: ["600519"])
     monkeypatch.setattr(
         eastmoney_cn,
         "fetch_share_structure",
@@ -348,7 +346,9 @@ def test_sync_share_structure_rewinds_metrics_watermark_on_backfill(
         conn.commit()
 
     with connect(dsn) as conn:
-        sync_share_structure(conn, batch_id=f"test-extsync-{uuid.uuid4()}")
+        sync_share_structure(
+            conn, batch_id=f"test-extsync-{uuid.uuid4()}", universe=["600519"]
+        )
         conn.commit()
 
     with connect(dsn) as conn:
@@ -361,8 +361,6 @@ def test_sync_share_structure_rewinds_to_new_backfill_not_existing_history(
 ):
     from etl.sources import eastmoney_cn
     from etl.sync_external import metrics_scope, set_watermark, sync_share_structure
-
-    monkeypatch.setattr("etl.sync_external._a_share_universe", lambda: ["600519"])
 
     # 表中已有一条远古记录：本次全量重抓仍会返回它，但不该把水位线打回远古
     with connect(dsn) as conn, conn.cursor() as cur:
@@ -390,7 +388,9 @@ def test_sync_share_structure_rewinds_to_new_backfill_not_existing_history(
         conn.commit()
 
     with connect(dsn) as conn:
-        sync_share_structure(conn, batch_id=f"test-extsync-{uuid.uuid4()}")
+        sync_share_structure(
+            conn, batch_id=f"test-extsync-{uuid.uuid4()}", universe=["600519"]
+        )
         conn.commit()
 
     with connect(dsn) as conn:
@@ -407,10 +407,6 @@ def test_sync_share_structure_rewinds_only_the_backfilled_symbol(
     """
     from etl.sources import eastmoney_cn
     from etl.sync_external import metrics_scope, set_watermark, sync_share_structure
-
-    monkeypatch.setattr(
-        "etl.sync_external._a_share_universe", lambda: ["600519", "000001"]
-    )
 
     def _fetch(code: str) -> list[dict]:
         if code == "600519":
@@ -429,9 +425,181 @@ def test_sync_share_structure_rewinds_only_the_backfilled_symbol(
         conn.commit()
 
     with connect(dsn) as conn:
-        sync_share_structure(conn, batch_id=f"test-extsync-{uuid.uuid4()}")
+        sync_share_structure(
+            conn,
+            batch_id=f"test-extsync-{uuid.uuid4()}",
+            universe=["600519", "000001"],
+        )
         conn.commit()
 
     with connect(dsn) as conn:
         assert get_watermark(conn, metrics_scope("600519")) == "2026-05-28"
         assert get_watermark(conn, metrics_scope("000001")) == "2026-09-01"
+
+
+# --- 批量采集的覆盖面校验与失败可见性 ---------------------------------------
+#
+# 真实事故：76,272 行与 232 条水位线时间戳完全相同，说明该批是**正常返回后提交**
+# 的（当时 failed = 0），失效向量是 universe/遍历范围偏小，不是 per-symbol 失败。
+# （原记载"进程被异常终止"依据"两次写入仅隔 27 秒"不成立：ingested_at/updated_at
+# 用 now()，即事务开始时间，推不出运行时长。）因此「失败率告警」抓不到这类事故，
+# 必须对清单大小本身做合理性校验。
+
+
+def test_a_share_universe_rejects_abnormally_small_listing(monkeypatch):
+    """清单异常偏小必须显式失败，而不是被当成一次成功的小范围采集。"""
+    import akshare
+    import pandas as pd
+
+    from etl.sync_external import _a_share_universe
+
+    small = pd.DataFrame({"code": ["600519", "000001"], "name": ["贵州茅台", "平安银行"]})
+    monkeypatch.setattr(akshare, "stock_info_a_code_name", lambda: small)
+
+    with pytest.raises(RuntimeError, match="universe"):
+        _a_share_universe()
+
+
+def test_a_share_universe_accepts_full_listing(monkeypatch):
+    import akshare
+    import pandas as pd
+
+    from etl.sync_external import _a_share_universe
+
+    codes = [str(600000 + i) for i in range(3000)]
+    frame = pd.DataFrame({"code": codes, "name": ["X"] * len(codes)})
+    monkeypatch.setattr(akshare, "stock_info_a_code_name", lambda: frame)
+
+    assert _a_share_universe() == codes
+
+
+def test_sync_external_fetches_universe_once(dsn, cleanup_external_sync, monkeypatch):
+    """清单只取一次（两个批量源共用），避免重复约 11s 的抓取。"""
+    from etl.sources import akshare_cn, coingecko, sec_edgar, sina_cn, worldbank
+
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "etl.sync_external._a_share_universe",
+        lambda: (calls.append(1), ["600519"])[1],
+    )
+    monkeypatch.setattr(coingecko, "fetch_markets", _fake_markets)
+    monkeypatch.setattr(worldbank, "fetch_indicator", lambda _c, _i: [])
+    monkeypatch.setattr(akshare_cn, "fetch_financials", lambda _s: [])
+    monkeypatch.setattr(akshare_cn, "fetch_lhb", lambda _a, _b: [])
+    monkeypatch.setattr(sec_edgar, "fetch_submissions", lambda cik: {"cik": cik, "name": "X", "tickers": [], "exchanges": []})
+    monkeypatch.setattr(sec_edgar, "fetch_company_facts", lambda cik: {"cik": cik, "facts": {}})
+    monkeypatch.setattr(sina_cn, "fetch_balance_sheet", lambda _c: [])
+    monkeypatch.setattr(eastmoney_cn, "fetch_share_structure", lambda _c: [])
+
+    sync_external(dsn, batch_id=f"test-extsync-{uuid.uuid4()}")
+
+    assert len(calls) == 1
+
+
+def test_sync_external_marks_bulk_sources_error_when_universe_too_small(
+    dsn, cleanup_external_sync, monkeypatch
+):
+    from etl.sources import akshare_cn, coingecko, sec_edgar, worldbank
+
+    monkeypatch.setattr(coingecko, "fetch_markets", _fake_markets)
+    monkeypatch.setattr(worldbank, "fetch_indicator", lambda _c, _i: [])
+    monkeypatch.setattr(akshare_cn, "fetch_financials", lambda _s: [])
+    monkeypatch.setattr(akshare_cn, "fetch_lhb", lambda _a, _b: [])
+    monkeypatch.setattr(sec_edgar, "fetch_submissions", lambda cik: {"cik": cik, "name": "X", "tickers": [], "exchanges": []})
+    monkeypatch.setattr(sec_edgar, "fetch_company_facts", lambda cik: {"cik": cik, "facts": {}})
+
+    def _too_small() -> list[str]:
+        raise RuntimeError("a-share universe too small: 2")
+
+    monkeypatch.setattr("etl.sync_external._a_share_universe", _too_small)
+
+    stats = sync_external(dsn, batch_id=f"test-extsync-{uuid.uuid4()}")
+
+    assert stats["cn-balance"]["status"] == "error"
+    assert stats["cn-share"]["status"] == "error"
+    assert "too small" in stats["cn-balance"]["error"]
+
+
+def test_sync_balance_sheet_reports_universe_skipped_and_errors(
+    dsn, cleanup_external_sync, monkeypatch
+):
+    from etl.sources import sina_cn
+    from etl.sync_external import sync_balance_sheet
+
+    def _fetch(code: str) -> list[dict]:
+        if code == "000001":
+            raise RuntimeError("network down")
+        return [{"报告日": "20260630", "资产总计": 100.0}]
+
+    monkeypatch.setattr(sina_cn, "fetch_balance_sheet", _fetch)
+    universe = ["600519", "000001", "300750"]
+    batch = f"test-extsync-{uuid.uuid4()}"
+
+    with connect(dsn) as conn:
+        first = sync_balance_sheet(conn, batch_id=batch, universe=universe)
+        conn.commit()
+    assert first["universe"] == 3
+    assert first["skipped"] == 0
+    assert first["failed"] == 1
+    assert first["errors"] == ["000001: network down"]
+
+    with connect(dsn) as conn:
+        second = sync_balance_sheet(conn, batch_id=batch, universe=universe)
+        conn.commit()
+    # 同周内：成功过的 2 只跳过，失败的 1 只继续重试
+    assert second["skipped"] == 2
+    assert second["failed"] == 1
+    assert second["rows"] == 0
+
+
+def test_main_exits_nonzero_when_any_source_fails(dsn, monkeypatch):
+    from etl import sync_external as module
+
+    monkeypatch.setenv("WAREHOUSE_DSN", dsn)
+    monkeypatch.setattr(
+        module,
+        "sync_external",
+        lambda _dsn: {
+            "coingecko": {"status": "ok", "rows": 1},
+            "cn-balance": {"status": "error", "error": "boom"},
+        },
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+    assert excinfo.value.code == 1
+
+
+def test_main_exits_zero_when_all_sources_ok(dsn, monkeypatch, capsys):
+    from etl import sync_external as module
+
+    monkeypatch.setenv("WAREHOUSE_DSN", dsn)
+    monkeypatch.setattr(
+        module,
+        "sync_external",
+        lambda _dsn: {
+            "coingecko": {"status": "ok", "rows": 1},
+            "cn-balance": {"status": "ok", "rows": 10, "failed": 0, "universe": 5567, "skipped": 0},
+        },
+    )
+
+    module.main()  # 不抛 SystemExit
+    assert "cn-balance" in capsys.readouterr().out
+
+
+def test_main_exits_nonzero_on_under_coverage(dsn, monkeypatch):
+    """清单偏小（覆盖面不足）同样必须让进程退出码非 0。"""
+    from etl import sync_external as module
+
+    monkeypatch.setenv("WAREHOUSE_DSN", dsn)
+    monkeypatch.setattr(
+        module,
+        "sync_external",
+        lambda _dsn: {
+            "cn-balance": {"status": "ok", "rows": 1, "failed": 0, "universe": 232, "skipped": 0},
+        },
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+    assert excinfo.value.code == 1
