@@ -164,28 +164,57 @@ def sync_akshare(conn: Any, batch_id: str) -> dict[str, Any]:
     return {"finance": len(finance_rows), "lhb": len(lhb_rows)}
 
 
-METRICS_SCOPE = "cn-daily:metrics"
+# 派生指标水位线：**per-symbol**，值为该标的「下一个待处理交易日」。
+#
+# 旧实现使用单个全局 scope "cn-daily:metrics"（无 symbol 后缀）：它只前进、
+# 不感知标的集合变化，新标的的历史 K 线会全部落在水位线之前而被静默丢弃
+# （输出仍是 {'rows': N}、退出码 0，与正确全量从外部无法区分）。
+# 该全局 scope **已废弃**：代码不再读写它；真实库中残留的行（实测值为
+# 2016-06-30）可忽略，也可手动 `DELETE FROM etl_watermarks WHERE
+# scope = 'cn-daily:metrics'`。
+METRICS_SCOPE_PREFIX = "cn-daily:metrics"
 
 
-def _rewind_metrics_watermark(conn: Any, earliest_change: str) -> None:
-    """股本回填历史日期时回退派生指标水位线，强制重算受影响区间。
+def metrics_scope(symbol: str) -> str:
+    """派生指标水位线 scope，与 `cn-balance:{symbol}` / `cn-share:{symbol}` 语义对齐。"""
+    return f"{METRICS_SCOPE_PREFIX}:{symbol}"
+
+
+def get_watermarks(conn: Any, scopes: list[str]) -> dict[str, str]:
+    """批量读取水位线，避免 per-symbol 逐条查询。"""
+    if not scopes:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT scope, last_value FROM etl_watermarks WHERE scope = ANY(%s)",
+            (scopes,),
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def _rewind_metrics_watermark(conn: Any, symbol: str, earliest_change: str) -> None:
+    """股本回填历史日期时回退**该标的**的派生指标水位线，强制重算受影响区间。
 
     否则该区间内的市值/换手率会沿用变更前的股本，静默算错。
+    只回退本次真正新增记录的标的：某一只标的回填不应导致全市场重算。
+    该标的尚无水位线时说明它从未被计算过，无需回退（下次运行会全量计算）。
     """
-    last = get_watermark(conn, METRICS_SCOPE)
-    if last is None or earliest_change < last:
-        set_watermark(conn, METRICS_SCOPE, earliest_change)
+    scope = metrics_scope(symbol)
+    last = get_watermark(conn, scope)
+    if last is not None and earliest_change < last:
+        set_watermark(conn, scope, earliest_change)
 
 
-def _new_change_dates(conn: Any, rows: list[dict[str, Any]]) -> set[str]:
-    """返回 rows 中表内尚不存在的变更日期集合（本次真正新增/回填）。
+def _new_change_dates(conn: Any, rows: list[dict[str, Any]]) -> dict[str, str]:
+    """返回本次真正新增/回填的 `symbol -> 最早变更日期`。
 
     全市场每周重抓完整变更历史，rows 含大量已存在记录；回退目标只能取
-    本次新增的最小日期，否则会把派生指标水位线打到远古上市日。
+    本次新增的日期，否则会把派生指标水位线打到远古上市日。回退按标的进行，
+    故按 symbol 归组返回各自的最早新增日期。
     """
     pairs = {(row["symbol"], row["change_date"]) for row in rows}
     if not pairs:
-        return set()
+        return {}
     existing: set[tuple[str, str]] = set()
     pair_list = list(pairs)
     with conn.cursor() as cur:
@@ -201,7 +230,13 @@ def _new_change_dates(conn: Any, rows: list[dict[str, Any]]) -> set[str]:
                 params,
             )
             existing.update((row[0], row[1]) for row in cur.fetchall())
-    return {change_date for symbol, change_date in pairs if (symbol, change_date) not in existing}
+
+    earliest: dict[str, str] = {}
+    for symbol, change_date in pairs - existing:
+        current = earliest.get(symbol)
+        if current is None or change_date < current:
+            earliest[symbol] = change_date
+    return earliest
 
 
 def _a_share_universe() -> list[str]:
@@ -263,8 +298,8 @@ def sync_share_structure(conn: Any, batch_id: str) -> dict[str, Any]:
     if rows:
         new_dates = _new_change_dates(conn, rows)
         upsert_external_rows(conn, "cn_share_structure", rows)
-        if new_dates:
-            _rewind_metrics_watermark(conn, min(new_dates))
+        for symbol, earliest_change in new_dates.items():
+            _rewind_metrics_watermark(conn, symbol, earliest_change)
     return {"rows": len(rows), "failed": failed}
 
 

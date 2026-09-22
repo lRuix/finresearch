@@ -52,7 +52,7 @@ def cleanup_external_sync(dsn):
             WHERE scope LIKE 'coingecko:%' OR scope LIKE 'sec:%'
                OR scope LIKE 'worldbank:%' OR scope LIKE 'akshare:%'
                OR scope LIKE 'cn-balance:%' OR scope LIKE 'cn-share:%'
-               OR scope = 'cn-daily:metrics'
+               OR scope = 'cn-daily:metrics' OR scope LIKE 'cn-daily:metrics:%'
             """
         )
         conn.commit()
@@ -243,7 +243,7 @@ def test_sync_share_structure_rewinds_metrics_watermark_on_backfill(
     dsn, cleanup_external_sync, monkeypatch
 ):
     from etl.sources import eastmoney_cn
-    from etl.sync_external import METRICS_SCOPE, set_watermark, sync_share_structure
+    from etl.sync_external import metrics_scope, set_watermark, sync_share_structure
 
     monkeypatch.setattr("etl.sync_external._a_share_universe", lambda: ["600519"])
     monkeypatch.setattr(
@@ -255,7 +255,7 @@ def test_sync_share_structure_rewinds_metrics_watermark_on_backfill(
     )
 
     with connect(dsn) as conn:
-        set_watermark(conn, METRICS_SCOPE, "2026-09-01")
+        set_watermark(conn, metrics_scope("600519"), "2026-09-01")
         conn.commit()
 
     with connect(dsn) as conn:
@@ -263,15 +263,15 @@ def test_sync_share_structure_rewinds_metrics_watermark_on_backfill(
         conn.commit()
 
     with connect(dsn) as conn:
-        # 股本变更日期早于已处理区间，水位线必须回退以重算
-        assert get_watermark(conn, METRICS_SCOPE) == "2026-05-28"
+        # 股本变更日期早于已处理区间，该标的的水位线必须回退以重算
+        assert get_watermark(conn, metrics_scope("600519")) == "2026-05-28"
 
 
 def test_sync_share_structure_rewinds_to_new_backfill_not_existing_history(
     dsn, cleanup_external_sync, monkeypatch
 ):
     from etl.sources import eastmoney_cn
-    from etl.sync_external import METRICS_SCOPE, set_watermark, sync_share_structure
+    from etl.sync_external import metrics_scope, set_watermark, sync_share_structure
 
     monkeypatch.setattr("etl.sync_external._a_share_universe", lambda: ["600519"])
 
@@ -297,7 +297,7 @@ def test_sync_share_structure_rewinds_to_new_backfill_not_existing_history(
     )
 
     with connect(dsn) as conn:
-        set_watermark(conn, METRICS_SCOPE, "2026-09-01")
+        set_watermark(conn, metrics_scope("600519"), "2026-09-01")
         conn.commit()
 
     with connect(dsn) as conn:
@@ -306,4 +306,43 @@ def test_sync_share_structure_rewinds_to_new_backfill_not_existing_history(
 
     with connect(dsn) as conn:
         # 回退目标应是本次新增的 2026-05-28，而非已存在的远古 1990-01-01
-        assert get_watermark(conn, METRICS_SCOPE) == "2026-05-28"
+        assert get_watermark(conn, metrics_scope("600519")) == "2026-05-28"
+
+
+def test_sync_share_structure_rewinds_only_the_backfilled_symbol(
+    dsn, cleanup_external_sync, monkeypatch
+):
+    """股本回填只回退该标的的水位线，其他标的（尤其全市场 5000+）不受影响。
+
+    全局水位线被拆除后，"某只标的回填导致全市场重算"是新的失效向量。
+    """
+    from etl.sources import eastmoney_cn
+    from etl.sync_external import metrics_scope, set_watermark, sync_share_structure
+
+    monkeypatch.setattr(
+        "etl.sync_external._a_share_universe", lambda: ["600519", "000001"]
+    )
+
+    def _fetch(code: str) -> list[dict]:
+        if code == "600519":
+            return [
+                {"变更日期": "2026-05-28", "总股本": 1250081601, "已流通股份": 1250081601}
+            ]
+        return [
+            {"变更日期": "2026-09-10", "总股本": 1000, "已流通股份": 1000}
+        ]
+
+    monkeypatch.setattr(eastmoney_cn, "fetch_share_structure", _fetch)
+
+    with connect(dsn) as conn:
+        set_watermark(conn, metrics_scope("600519"), "2026-09-01")
+        set_watermark(conn, metrics_scope("000001"), "2026-09-01")
+        conn.commit()
+
+    with connect(dsn) as conn:
+        sync_share_structure(conn, batch_id=f"test-extsync-{uuid.uuid4()}")
+        conn.commit()
+
+    with connect(dsn) as conn:
+        assert get_watermark(conn, metrics_scope("600519")) == "2026-05-28"
+        assert get_watermark(conn, metrics_scope("000001")) == "2026-09-01"
